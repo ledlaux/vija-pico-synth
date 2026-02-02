@@ -1,6 +1,6 @@
 
 /*
-  VIJA (v1.0) 
+  VIJA (v1.0.1) 
   
   Raspberry PICO polyphonic synthesizer based on Mutable Instruments Braids macro oscillator 
   in semi-modular format.
