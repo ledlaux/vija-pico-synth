@@ -1,6 +1,5 @@
-
 /*
-  VIJA (v1.0.2) 
+  VIJA (v1.0.3) 
 
   Copyright (c) 2025 Vadims Maksimovs ledlaux.github.com | GPLv3
   
@@ -14,6 +13,7 @@
   - Filter (SVF)
   - OLED display with menu system & oscilloscope
   - Synth controls via potentiometers or MIDI CC
+  - Arpeggiator (midi sync)
   
   Hardware:
   - RP2040 or RP2350 board, I2S PCM5102 DAC, SSD1306 OLED, rotary encoder with button, 2 pots, 2 cv jacks or 2 more pots
@@ -65,28 +65,28 @@
 
 #define I2S_DATA_PIN 9
 #define I2S_BCLK_PIN 10
-#define SAMPLE_RATE 32000
+#define SAMPLE_RATE 48000
 #define AUDIO_BLOCK 32
 #define MAX_VOICES 4
 
-#define USE_POTS 1
+#define USE_POTS 0
 #define POT_TIMBRE A0      // GPIO26
 #define POT_COLOR A1       // GPIO27
 #define POT_TIMBRE_MOD A2  // GPIO28
 #define POT_COLOR_MOD A3   // GPIO29
 
-#define ENCODER_CLK 2
-#define ENCODER_DT 3
-#define ENCODER_SW 4
+#define ENCODER_SW 13
+#define ENCODER_DT 14
+#define ENCODER_CLK 15
 #define BUTTON_DEBOUNCE_MS 200
 #define LONG_PRESS_MS 1000
 
-#define USE_UART_MIDI 1  // 0 = USB MIDI, 1 = UART MIDI
-#define MIDI_UART_RX 13
+#define USE_UART_MIDI 0  // 0 = USB MIDI, 1 = UART MIDI
+#define MIDI_UART_RX 1
 
 #define USE_SCREEN 1
-#define OLED_SDA 0
-#define OLED_SCL 1
+#define OLED_SDA 4
+#define OLED_SCL 5
 #define SCOPE_WIDTH 128
 
 // Splash screen
@@ -119,12 +119,26 @@ enum EncoderState { ENGINE_SELECT,
                     VOLUME_ADJUST,
                     ATTACK_ADJUST,
                     RELEASE_ADJUST,
+                    ARP_TOGGLE,
+                    ARP_MODE,
+                    ARP_DIV,
+                    ARP_LATCH,
                     FILTER_TOGGLE,
                     MIDI_MOD,
                     CV_MOD1,
                     CV_MOD2,
                     MIDI_CH,
                     SCOPE_TOGGLE };
+
+
+#define MAX_ARP_NOTES 12
+
+enum ArpDirection { UP,
+                    DOWN,
+                    UP_DOWN,
+                    RANDOM,
+                    CHORD,
+                    AS_PLAYED };
 
 volatile uint8_t midi_ch = 1;
 volatile int engine_idx = 1;
@@ -179,6 +193,9 @@ volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
 volatile EncoderState enc_state = ENGINE_SELECT;
 
 volatile bool system_ready = false;
+
+volatile bool arp_latch_enabled = false;
+volatile int physicalKeysHeld = 0;
 
 // For UI updates
 float pot_timbre = 0.5f;
@@ -279,6 +296,62 @@ const char *const engine_names[] = {
 
 constexpr int NUM_ENGINES = sizeof(engine_names) / sizeof(engine_names[0]);
 
+struct Arpeggiator {
+  volatile bool enabled = false;
+  volatile ArpDirection mode = AS_PLAYED;
+  volatile uint8_t division = 6;
+
+  int heldNotes[MAX_ARP_NOTES];
+  int sortedNotes[MAX_ARP_NOTES];
+  volatile int numHeld = 0;
+
+  int currentStep = -1;
+  // --- FIX: Add this line below ---
+  int lastVoiceIndices[MAX_VOICES];
+  int lastPitchCount = 0;
+  bool directionUp = true;
+  uint32_t tickCounter = 0;
+
+  void addNote(int pitch) {
+    if (numHeld < MAX_ARP_NOTES) {
+      heldNotes[numHeld++] = pitch;
+      updateSort();
+    }
+  }
+
+  void removeNote(int pitch) {
+    for (int i = 0; i < numHeld; i++) {
+      if (heldNotes[i] == pitch) {
+        for (int j = i; j < numHeld - 1; j++) heldNotes[j] = heldNotes[j + 1];
+        numHeld--;
+        updateSort();
+        break;
+      }
+    }
+    if (numHeld == 0) currentStep = -1;
+  }
+
+  void updateSort() {
+    for (int i = 0; i < numHeld; i++) sortedNotes[i] = heldNotes[i];
+    for (int i = 0; i < numHeld - 1; i++) {
+      for (int j = 0; j < numHeld - i - 1; j++) {
+        if (sortedNotes[j] > sortedNotes[j + 1]) {
+          int temp = sortedNotes[j];
+          sortedNotes[j] = sortedNotes[j + 1];
+          sortedNotes[j + 1] = temp;
+        }
+      }
+    }
+  }
+
+  void clear() {
+    numHeld = 0;
+    currentStep = -1;
+    lastPitchCount = 0;
+  }
+};
+
+Arpeggiator arp;
 
 int findFreeVoice() {
   int oldest = 0;
@@ -398,18 +471,6 @@ void __not_in_flash_func(updateAudio)() {
     }
   }
 
-  // static int scope_idx = 0;
-  // if (oscilloscope_enabled && !scope_ready) {
-  //   for (int i = 0; i < AUDIO_BLOCK; i += 8) {
-  //     scope_buffer_front[scope_idx++] = mix[i];
-  //     if (scope_idx >= SCOPE_WIDTH) {
-  //       memcpy((void *)scope_buffer_back, (void *)scope_buffer_front, sizeof(scope_buffer_back));
-  //       scope_ready = true;
-  //       scope_idx = 0;
-  //       break;
-  //     }
-  //   }
-  // }
 
   static int scope_idx = 0;
   static float scopeSmooth = 0.0f;
@@ -510,6 +571,34 @@ void drawEngineUI() {
     case VOLUME_ADJUST: sprintf(menuBuf, "VOL:%3d", int(master_volume * 100)); break;
     case ATTACK_ADJUST: sprintf(menuBuf, "A:%.2f", env_attack_s); break;
     case RELEASE_ADJUST: sprintf(menuBuf, "R:%.2f", env_release_s); break;
+
+    case ARP_TOGGLE:
+      sprintf(menuBuf, "ARP:%s", arp.enabled ? "ON" : "OFF");
+      break;
+
+    case ARP_MODE:
+      {
+        const char *modes[] = { "UP", "DOWN", "UPDN", "RAND", "CHRD", "PLAY" };
+        sprintf(menuBuf, "MODE:%s", modes[arp.mode]);
+        break;
+      }
+
+    case ARP_DIV:
+      {
+        const char *divStr;
+        if (arp.division == 24) divStr = "1/4";
+        else if (arp.division == 12) divStr = "1/8";
+        else if (arp.division == 6) divStr = "1/16";
+        else if (arp.division == 3) divStr = "1/32";
+        else divStr = "??";
+        sprintf(menuBuf, "DIV:%s", divStr);
+        break;
+      }
+
+    case ARP_LATCH:
+      sprintf(menuBuf, "LATCH:%s", arp_latch_enabled ? "ON" : "OFF");
+      break;
+
     case FILTER_TOGGLE: sprintf(menuBuf, "FLT:%s", filter_enabled ? "ON" : "OFF"); break;
     case CV_MOD1: sprintf(menuBuf, "CV1:%s", cv_mod1 ? "ON" : "OFF"); break;
     case CV_MOD2: sprintf(menuBuf, "CV2:%s", cv_mod2 ? "ON" : "OFF"); break;
@@ -564,13 +653,91 @@ void drawSplash() {
   display.getTextBounds(subtitle, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 40);
   display.println(subtitle);
-  const char *version = "v1.0.2";
+  const char *version = "v1.0.3";
   display.getTextBounds(version, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 54);
   display.println(version);
   display.display();
 }
 #endif
+
+
+void __not_in_flash_func(triggerArpVoice)(int pitch) {
+  int v = findFreeVoice();
+  if (v < 0) return;
+
+  voices[v].pitch = pitch;
+  voices[v].velocity = 0.8f;
+  voices[v].active = true;
+  voices[v].last_trig = false;
+  voices[v].age = global_age++;
+
+  // Track the voice index
+  if (arp.lastPitchCount < MAX_VOICES) {
+    arp.lastVoiceIndices[arp.lastPitchCount++] = v;
+  }
+}
+
+void __not_in_flash_func(advanceArp)() {
+  // 1. Release previous voices by index
+  for (int i = 0; i < arp.lastPitchCount; i++) {
+    int v = arp.lastVoiceIndices[i];
+    if (v >= 0 && v < MAX_VOICES) {
+      voices[v].active = false;
+    }
+  }
+  arp.lastPitchCount = 0;
+
+  if (arp.numHeld == 0) return;
+
+  // 2. Chord Mode
+  if (arp.mode == CHORD) {
+    for (int i = 0; i < arp.numHeld && i < MAX_VOICES; i++) {
+      triggerArpVoice(arp.heldNotes[i]);
+    }
+  }
+  // 3. Sequential Modes
+  else {
+    if (arp.currentStep < 0 || arp.currentStep >= arp.numHeld) arp.currentStep = 0;
+
+    switch (arp.mode) {
+      case UP:
+      case AS_PLAYED:
+        arp.currentStep = (arp.currentStep + 1) % arp.numHeld;
+        break;
+      case DOWN:
+        arp.currentStep = (arp.currentStep <= 0) ? arp.numHeld - 1 : arp.currentStep - 1;
+        break;
+      case RANDOM:
+        arp.currentStep = random(0, arp.numHeld);
+        break;
+      case UP_DOWN:
+        if (arp.directionUp) {
+          arp.currentStep++;
+          if (arp.currentStep >= arp.numHeld - 1) {
+            arp.currentStep = arp.numHeld - 1;
+            arp.directionUp = false;
+          }
+        } else {
+          arp.currentStep--;
+          if (arp.currentStep <= 0) {
+            arp.currentStep = 0;
+            arp.directionUp = true;
+          }
+        }
+        break;
+    }
+
+    // Safety bound
+    if (arp.currentStep < 0) arp.currentStep = 0;
+    if (arp.currentStep >= arp.numHeld) arp.currentStep = arp.numHeld - 1;
+
+    int pitch = (arp.mode == AS_PLAYED) ? arp.heldNotes[arp.currentStep]
+                                        : arp.sortedNotes[arp.currentStep];
+    triggerArpVoice(pitch);
+  }
+}
+
 
 
 void __not_in_flash_func(handleMIDI)() {
@@ -582,111 +749,142 @@ void __not_in_flash_func(handleMIDI)() {
   bool has_msg = false;
 
 #if USE_UART_MIDI
-  if (Serial1.available() == 0) return;
-
-  uint8_t byte = Serial1.read();
-
-  if (byte >= 0xF8) return;
-
-  if (byte & 0x80) {
-    running_status = byte;
-    data_idx = 0;
-    return;
-  }
-
-  if (running_status == 0) return;
-  if (data_idx < 2) data_bytes[data_idx++] = byte;
-  uint8_t type = running_status & 0xF0;
-  uint8_t expected_len = (type == 0xC0 || type == 0xD0) ? 1 : 2;
-
-  if (data_idx < expected_len) return;
-
-  status = running_status;
-  d1 = data_bytes[0];
-  d2 = (expected_len == 2) ? data_bytes[1] : 0;
-  data_idx = 0;
-  has_msg = true;
-
-  // --- Special CC64 sustain handling ---
-  if ((status & 0xF0) == 0xB0 && d1 == 64) {
-    if (d2 >= 64) {
-      sustain_enabled = true;
-    } else {
-      sustain_enabled = false;
-      for (int i = 0; i < MAX_VOICES; i++) {
-        if (voices[i].sustained) {
-          voices[i].active = false;
-          voices[i].sustained = false;
+  if (Serial1.available() > 0) {
+    uint8_t byte = Serial1.read();
+    if (byte >= 0xF8) {
+      if (byte == 0xF8 && arp.enabled) {  // Clock
+        arp.tickCounter++;
+        if (arp.tickCounter >= arp.division) {
+          arp.tickCounter = 0;
+          advanceArp();
         }
+      } else if (byte == 0xFA || byte == 0xFB) {  // Start/Continue
+        arp.tickCounter = arp.division;
+        arp.currentStep = -1;
+      }
+      return;
+    }
+    if (byte & 0x80) {
+      running_status = byte;
+      data_idx = 0;
+    } else if (running_status != 0) {
+      if (data_idx < 2) data_bytes[data_idx++] = byte;
+      uint8_t type = running_status & 0xF0;
+      uint8_t len = (type == 0xC0 || type == 0xD0) ? 1 : 2;
+      if (data_idx == len) {
+        status = running_status;
+        d1 = data_bytes[0];
+        d2 = (len == 2) ? data_bytes[1] : 0;
+        data_idx = 0;
+        has_msg = true;
       }
     }
-    return;
   }
-
-#else  // USB MIDI
-  uint8_t packet[4];
-  if (!usb_midi.readPacket(packet)) return;
-
-  uint8_t cin = packet[0] & 0x0F;
-  if (cin < 0x8 || cin > 0xE) return;
-
-  status = packet[1];
-  d1 = packet[2];
-  d2 = packet[3];
-  has_msg = true;
 #endif
 
-  if (!has_msg) return;
-  if ((status & 0x80) == 0) return;
-  if ((status & 0x0F) != (midi_ch - 1)) return;
-
-  bool isNoteOff = ((status & 0xF0) == 0x80) || ((status & 0xF0) == 0x90 && d2 == 0);
-
-  if (isNoteOff) {
-    int i = findVoiceByPitch(d1);
-    if (i >= 0) {
-      if (sustain_enabled) {
-        voices[i].sustained = true;
-        voices[i].active = false;
-      } else {
-        voices[i].active = false;
-        voices[i].sustained = false;
+  uint8_t packet[4];
+  if (!has_msg && usb_midi.readPacket(packet)) {
+    uint8_t cin = packet[0] & 0x0F;
+    if (cin == 0xF) {  // USB Real-time
+      if (packet[1] == 0xF8 && arp.enabled) {
+        arp.tickCounter++;
+        if (arp.tickCounter >= arp.division) {
+          arp.tickCounter = 0;
+          advanceArp();
+        }
+      } else if (packet[1] == 0xFA || packet[1] == 0xFB) {
+        arp.tickCounter = arp.division;
+        arp.currentStep = -1;
       }
+      return;
     }
-  } else if ((status & 0xF0) == 0x90) {
-    int i = findFreeVoice();
-    voices[i].pitch = d1;
-    voices[i].velocity = d2 / 127.f;
-    voices[i].active = true;
-    voices[i].age = global_age++;
-  } else if ((status & 0xF0) == 0xB0) {
+    if (cin >= 0x8 && cin <= 0xE) {
+      status = packet[1];
+      d1 = packet[2];
+      d2 = packet[3];
+      has_msg = true;
+    }
+  }
+
+  if (!has_msg || (status & 0x0F) != (midi_ch - 1)) return;
+  uint8_t msgType = status & 0xF0;
+
+  if (msgType == 0xB0) {
     switch (d1) {
+      case 64:  // Sustain Pedal
+        sustain_enabled = (d2 >= 64);
+        if (!sustain_enabled && !arp.enabled) {
+          for (int i = 0; i < MAX_VOICES; i++) {
+            if (voices[i].sustained) {
+              voices[i].active = false;
+              voices[i].sustained = false;
+            }
+          }
+        }
+        break;
+
       case 7: master_volume = d2 / 127.f; break;
       case 8: engine_idx = map(d2, 0, 127, 0, NUM_ENGINES - 1); break;
-      case 9:  // Timbre
+
+      case 9:  // Timbre Lock
         if (midi_mod) {
           timbre_in = d2 / 127.f;
           timbre_locked = true;
           last_midi_lock_time = millis();
         }
         break;
-      case 10:  // Color
+
+      case 10:  // Color Lock
         if (midi_mod) {
           color_in = d2 / 127.f;
           color_locked = true;
           last_midi_lock_time = millis();
         }
         break;
+
       case 11: env_attack_s = 0.01f + (d2 / 127.f) * 2.f; break;
       case 12: env_release_s = 0.01f + (d2 / 127.f) * 3.f; break;
       case 71: filter_resonance_cc = d2; break;
       case 74: filter_cutoff_cc = d2; break;
-      case 15: fm_mod = d2 / 127.f; break;
-      case 16: timb_mod_midi = d2 / 127.f; break;
-      case 17: color_mod_midi = d2 / 127.f; break;
     }
     engine_updated = true;
     last_param_change = millis();
+    return;
+  }
+
+  bool isNoteOff = (msgType == 0x80) || (msgType == 0x90 && d2 == 0);
+
+  if (isNoteOff) {
+    if (arp.enabled) {
+      if (physicalKeysHeld > 0) physicalKeysHeld--;
+      // Only remove the note if we aren't latching
+      if (!arp_latch_enabled) {
+        arp.removeNote(d1);
+      }
+    } else {
+      int i = findVoiceByPitch(d1);
+      if (i >= 0) {
+        if (sustain_enabled) voices[i].sustained = true;
+        voices[i].active = false;
+      }
+    }
+  } else if (msgType == 0x90) {  // Note On
+    if (arp.enabled) {
+      if (arp_latch_enabled && physicalKeysHeld == 0) {
+        arp.clear();
+        for (int i = 0; i < MAX_VOICES; i++) voices[i].active = false;
+      }
+      physicalKeysHeld++;
+      arp.addNote(d1);
+    } else {
+      int v = findFreeVoice();
+      if (v >= 0) {
+        voices[v].pitch = d1;
+        voices[v].velocity = d2 / 127.f;
+        voices[v].active = true;
+        voices[v].age = global_age++;
+      }
+    }
   }
 }
 
@@ -860,7 +1058,18 @@ void setup() {
     fs_ready = true;
   }
 
-  usb_midi.begin();
+
+  //  MIDI Initialization
+  if (USE_UART_MIDI == 1) {
+    Serial1.setRX(MIDI_UART_RX);
+    Serial1.begin(31250);
+  } else {
+    TinyUSBDevice.setManufacturerDescriptor("LEDLAUX");
+    TinyUSBDevice.setProductDescriptor("VIJA");
+    TinyUSBDevice.setSerialDescriptor("PICO0");
+    usb_midi.begin();
+  }
+
   i2s_output.setFrequency(SAMPLE_RATE);
   i2s_output.setDATA(I2S_DATA_PIN);
   i2s_output.setBCLK(I2S_BCLK_PIN);
@@ -902,8 +1111,6 @@ void loop() {
 
 
 void setup1() {
-  Serial1.setRX(MIDI_UART_RX);
-  Serial1.begin(31250);
   pinMode(ENCODER_CLK, INPUT_PULLUP);
   pinMode(ENCODER_DT, INPUT_PULLUP);
   pinMode(ENCODER_SW, INPUT_PULLUP);
@@ -1163,12 +1370,58 @@ void loop1() {
             env_release_s = constrain(env_release_s + step * 0.01f, 0.01f, 2.f);
             env_params_changed = true;
             break;
+
+          case ARP_TOGGLE:
+            arp.enabled = !arp.enabled;
+            break;
+
+          case ARP_MODE:
+            {
+              int nextMode = (int)arp.mode + 1;
+              if (nextMode > 5) nextMode = 0;
+              arp.mode = (ArpDirection)nextMode;
+              break;
+            }
+
+          case ARP_DIV:
+            {
+              // Toggle through 24 (1/4), 12 (1/8), 6 (1/16), 3 (1/32)
+              if (arp.division == 24) arp.division = 12;
+              else if (arp.division == 12) arp.division = 6;
+              else if (arp.division == 6) arp.division = 3;
+              else arp.division = 24;
+              break;
+            }
+
+          case ARP_LATCH:
+            if (step != 0) {
+              arp_latch_enabled = !arp_latch_enabled;
+
+              if (!arp_latch_enabled) {
+                // 1. Clear the Arp internal buffer
+                arp.clear();
+
+                // 2. IMPORTANT: Hard-kill any voices currently tied to the Arp
+                for (int i = 0; i < MAX_VOICES; i++) {
+                  // We set active to false to trigger the envelope release
+                  voices[i].active = false;
+                  // If your engine is 'hanging', force velocity to 0 or re-init
+                  voices[i].sustained = false;
+                }
+
+                // 3. Reset the tracking array
+                arp.lastPitchCount = 0;
+              }
+              engine_updated = true;
+            }
+            break;
+
+
           case FILTER_TOGGLE:
             filter_enabled = !filter_enabled;
             midi_mod = false;
             cv_mod1 = false;
             cv_mod2 = false;
-
             break;
           case MIDI_MOD:
             midi_mod = !midi_mod;
@@ -1244,13 +1497,13 @@ void loop1() {
         break;
 
       case SETTINGS_MODE:
-        enc_state = (EncoderState)((enc_state + 1) % 9);
+        enc_state = (EncoderState)((enc_state + 1) % 14);
         engine_updated = true;
         break;
 
       case OSCILLOSCOPE_MODE:
         display_mode = SETTINGS_MODE;
-        enc_state = (EncoderState)((enc_state + 1) % 9);
+        enc_state = (EncoderState)((enc_state + 1) % 14);
         engine_updated = true;
         break;
     }
