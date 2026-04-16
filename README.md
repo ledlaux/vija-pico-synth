@@ -82,6 +82,11 @@ VIJA responds to the following Control Change (CC) messages on the selected MIDI
 
 ---
 
+### Arpeggiator
+
+
+---
+
 ## 💻 Software Setup
 
 1.  **Arduino IDE:** Install the [Earle Philhower Pico Core](https://github.com/earlephilhower/arduino-pico)
@@ -100,37 +105,37 @@ VIJA responds to the following Control Change (CC) messages on the selected MIDI
 - LittleFS & ArduinoJson for saving settings
 
 3.  **Compilation Settings:**
-   
-   - Enable flash file system for saving menu settings:  
-     Flash size: "2MB (Sketch:1MB, FS:1MB)"
-     
-   * **RP2040:**
-              - Optimize: Fast (-Ofast)    
-              - CPU Speed: 200-240mhz (Overclock) depending on the sample rate and needed voice count   
-              - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
-   * **RP2350:**
-              - Optimize: Fast (-Ofast)  
-              - Sample rate: 48000
+        
+   * **RP2040:**  
+              - Flash size: 2MB (Sketch:1MB, FS:1MB)  
+              - Optimize Even More (-O3)       
+              - CPU Speed: 200-240mhz (Overclock) depending on the sample rate and needed voice count     
+              - Sample rate: 32000 (4 voices) / 44100 (3 voices)    
+   * **RP2350:**  
+              - Flash size: 4MB (Sketch:1MB, FS:3MB)  
+              - Optimize Even More (-O3)  
+              - CPU Speed: 150-240mhz   
+              - Sample rate: 48000  
 ---
 
 ## ⚡ Schematic & Wiring
 
-For this project I use RP2040 Zero model, so adjust GPIO numbers for your board.
+For this project RP2040 Zero model was used, so adjust GPIO numbers for your board.
 
 ### 1. Audio Output (I2S DAC)
 Connect your **PCM5102** or similar I2S DAC:
 * **VCC/VIN** -> Pico 3.3V (Pin 36)
 * **GND** -> Pico GND
-* **LCK (LRCK)** -> Pico GP11 
+* **DIN (DATA)** -> Pico GP9
 * **BCK (BCLK)** -> Pico GP10 
-* **DIN (DATA)** -> Pico GP9 
+* **LCK (LRCK)** -> Pico GP11 
 
 ### 2. Control & Display
-* **OLED SDA** -> Pico GP0 
-* **OLED SCL** -> Pico GP1 
-* **Encoder CLK** -> Pico GP2 
-* **Encoder DT** -> Pico GP3 
-* **Encoder SW** -> Pico GP4 
+* **OLED SDA** -> Pico GP4 
+* **OLED SCL** -> Pico GP5
+* **Encoder SW** -> Pico GP6
+* **Encoder DT** -> Pico GP7 
+* **Encoder CLK** -> Pico GP8
 
 ### 3. Potentiometers (ADC)
 Connect the outer pins to 3.3V and GND, and the center wiper to:
@@ -140,7 +145,7 @@ Connect the outer pins to 3.3V and GND, and the center wiper to:
 * **Pot 4 (CV2)** -> GP29 
 
 ### 4. MIDI Input (UART)
-Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP13**.
+Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP1**.
 
 ---
 
@@ -152,6 +157,7 @@ Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP13**.
   
 ---
 ##  Version history
-* 2026-02-26 - v1.0.2
+* 2026-04-20 - v1.0.3 (added arpeggiator)
+* 2026-02-26 - v1.0.2 
 * 2026-02-03 - v1.0.1  
 * 2026-02-02 - First release v1.0
