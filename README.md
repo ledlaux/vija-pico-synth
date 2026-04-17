@@ -38,8 +38,7 @@ The synthesizer operates in three primary display modes:
 
 ### CV Modulation Mode1
 
-- Timbre & Color modulation
-- POTS → modulation depth  
+- Timbre & Color POTS → Modulation depth  
 - CV1 & CV2 →  Modulation source
 
 ### CV Modulation Mode2
