@@ -1202,7 +1202,7 @@ void loop1() {
     float srcT = analogRead(POT_TIMBRE_MOD) / 1023.0f;
     float srcC = analogRead(POT_COLOR_MOD) / 1023.0f;
 
-    const float SMOOTH_POT = 0.06f;
+    const float SMOOTH_POT = 0.03f;
     pot_timbre += (rT - pot_timbre) * SMOOTH_POT;
     pot_color += (rC - pot_color) * SMOOTH_POT;
 
