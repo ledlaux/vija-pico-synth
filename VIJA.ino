@@ -1,4 +1,3 @@
-
 /*
   VIJA (v1.0.3) 
 
@@ -193,6 +192,10 @@ const unsigned long AUTO_REVERT_MS = 4000;
 volatile unsigned long last_encoder_activity = 0;
 volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
 volatile EncoderState enc_state = ENGINE_SELECT;
+
+
+volatile int displayTimbre = 0;
+volatile int displayColor = 0;
 
 volatile bool system_ready = false;
 
@@ -641,19 +644,23 @@ void drawEngineUI() {
 
   if (!cv_mod1) {
     char buf[16];
-    int tVal = int((timbre_locked ? timbre_in : pot_timbre) * 127);
-    int mVal = int((color_locked ? color_in : pot_color) * 127);
+
+    int tVal = displayTimbre;
+    int mVal = displayColor;
+
+    if (timbre_locked) tVal = (int)(timbre_in * 127);
+    if (color_locked) mVal = (int)(color_in * 127);
+
     sprintf(buf, "T:%3d C:%3d", tVal, mVal);
 
-    int16_t x1, y1;
-    uint16_t w, h;
-    display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
-    display.setCursor(128 - w - 2, 55);
+    int16_t tx, ty;
+    uint16_t tw, th;
+    display.getTextBounds(buf, 0, 0, &tx, &ty, &tw, &th);
+    display.setCursor(128 - tw - 2, 55);
     display.print(buf);
   }
   display.display();
 }
-
 
 void drawSplash() {
 
@@ -1179,7 +1186,6 @@ void setup1() {
   system_ready = true;
 }
 
-
 void loop1() {
   saveButton();
 #if USE_SCREEN
@@ -1194,7 +1200,8 @@ void loop1() {
   static float smoothRes = 0.25f;
   static unsigned long last_pot_read = 0;
 
-  if (millis() - last_pot_read > 4) {
+  // --- 1. POTENTIOMETER & MODULATION PROCESSING ---
+  if (millis() - last_pot_read > 10) {
     last_pot_read = millis();
 
     float rT = analogRead(POT_TIMBRE) / 1023.0f;
@@ -1202,116 +1209,50 @@ void loop1() {
     float srcT = analogRead(POT_TIMBRE_MOD) / 1023.0f;
     float srcC = analogRead(POT_COLOR_MOD) / 1023.0f;
 
-    const float SMOOTH_POT = 0.03f;
-    pot_timbre += (rT - pot_timbre) * SMOOTH_POT;
-    pot_color += (rC - pot_color) * SMOOTH_POT;
+    const float SMOOTH_BASE = 0.05f;
+    pot_timbre += (rT - pot_timbre) * SMOOTH_BASE;
+    pot_color += (rC - pot_color) * SMOOTH_BASE;
 
-    if (pot_timbre > 0.999f) pot_timbre = 1.0f;
-    if (pot_timbre < 0.001f) pot_timbre = 0.0f;
-
-    if (pot_color > 0.999f) pot_color = 1.0f;
-    if (pot_color < 0.001f) pot_color = 0.0f;
-
-    int valT = (int)(pot_timbre * 127.0f + 0.5f);
-    int valC = (int)(pot_color * 127.0f + 0.5f);
-
-
-    if (!midi_mod) {
-      timbre_locked = false;
-      color_locked = false;
-      engine_updated = true;
-    }
-
-
+    // --- 2. MODES ---
     if (cv_mod1) {
-
-      // --- Smooth the potentiometer inputs (depth controls) ---
       smoothT += (rT - smoothT) * 0.15f;
       smoothC += (rC - smoothC) * 0.15f;
-
-      // --- Smooth the modulation sources ---
-      smoothTMod += (srcT - smoothTMod) * 0.1f;  // slower smoothing
+      smoothTMod += (srcT - smoothTMod) * 0.1f;
       smoothCMod += (srcC - smoothCMod) * 0.1f;
-
-      // --- Apply modulation depth with soft scaling ---
       timb_mod_cv += ((smoothT * smoothTMod) - timb_mod_cv) * 0.05f;
       color_mod_cv += ((smoothC * smoothCMod) - color_mod_cv) * 0.05f;
-
-      // --- Set base values for other modes ---
       timbre_in = 0.5f;
       color_in = 0.5f;
-      engine_updated = true;
-
-    }
-
-    else if (midi_mod) {
-
-      // -------- TIMBRE --------
-      if (timbre_locked) {
-        if (fabsf(rT - timbre_in) < 0.01f) {
-          timbre_locked = false;
-          smoothT = rT;
-        }
-      }
-
+    } else if (midi_mod) {
+      if (timbre_locked && fabsf(rT - timbre_in) < 0.05f) timbre_locked = false;
       if (!timbre_locked) {
         smoothT += (rT - smoothT) * 0.15f;
         timbre_in = smoothT;
       }
-
-      // -------- COLOR --------
-      if (color_locked) {
-        if (fabsf(rC - color_in) < 0.01f) {
-          color_locked = false;
-          smoothC = rC;
-        }
-      }
-
+      if (color_locked && fabsf(rC - color_in) < 0.05f) color_locked = false;
       if (!color_locked) {
         smoothC += (rC - smoothC) * 0.15f;
         color_in = smoothC;
       }
-
-      engine_updated = true;
-    }
-
-    else if (filter_enabled) {
-      // --- Update filter CVs from modulation pots ---
+    } else if (filter_enabled) {
       smoothCut += (srcT - smoothCut) * 0.1f;
       smoothRes += (srcC - smoothRes) * 0.1f;
-
       filter_cutoff_cc = (uint8_t)(smoothCut * 127.0f);
       filter_resonance_cc = (uint8_t)(smoothRes * 127.0f);
-
-      // --- Keep Timbre and Color pots working as default ---
       smoothT += (rT - smoothT) * 0.08f;
       smoothC += (rC - smoothC) * 0.08f;
-
       timbre_in = smoothT;
       color_in = smoothC;
-
-      // --- Decay any modulation CV influence smoothly ---
-      timb_mod_cv *= 0.9f;
-      color_mod_cv *= 0.9f;
-
-      // --- FM is inactive in filter mode ---
-      fm_target = 0.0f;
-      engine_updated = true;
-
     }
 
     else if (cv_mod2) {
-
       smoothT += (rT - smoothT) * 0.08f;
       smoothC += (rC - smoothC) * 0.08f;
       timbre_in = smoothT;
       color_in = smoothC;
 
-      // --- 2. Rolling Average Filter ---
-      static float historyT[16];
-      static float historyC[16];
+      static float historyT[16], historyC[16];
       static int histIdx = 0;
-
       historyT[histIdx] = srcT;
       historyC[histIdx] = srcC;
       histIdx = (histIdx + 1) % 16;
@@ -1321,27 +1262,20 @@ void loop1() {
         avgT += historyT[i];
         avgC += historyC[i];
       }
-      avgT /= 16.0f;
-      avgC /= 16.0f;
+      smoothTMod += ((avgT / 16.0f) - smoothTMod) * 0.05f;
+      smoothCMod += ((avgC / 16.0f) - smoothCMod) * 0.05f;
 
-      smoothTMod += (avgT - smoothTMod) * 0.05f;
-      smoothCMod += (avgC - smoothCMod) * 0.05f;
-
-      // --- 3. Strict Deadzone ---
       const float CV_DEADZONE = 0.15f;
       bool cvT_active = (smoothTMod > CV_DEADZONE);
       bool cvC_active = (smoothCMod > CV_DEADZONE);
 
-      // --- 4. Large-Band Hysteresis for Engines ---
+      // Large-Band Hysteresis for Engines
       static float lockT = -1.0f;
       const float ENG_HYST = 0.10f;
-
       if (cvT_active) {
         if (fabsf(smoothTMod - lockT) > ENG_HYST) {
           float norm = (smoothTMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
-          int new_idx = (int)(norm * (float)NUM_ENGINES);
-          new_idx = constrain(new_idx, 0, NUM_ENGINES - 1);
-
+          int new_idx = constrain((int)(norm * NUM_ENGINES), 0, NUM_ENGINES - 1);
           if (new_idx != engine_idx) {
             engine_idx = new_idx;
             lockT = smoothTMod;
@@ -1352,14 +1286,12 @@ void loop1() {
         lockT = -1.0f;
       }
 
-      // --- 5. Large-Band Hysteresis for FM ---
+      // Large-Band Hysteresis for FM
       static float lockC = 0.0f;
       const float FM_HYST = 0.1f;
-
       if (cvC_active) {
         if (fabsf(smoothCMod - lockC) > FM_HYST) {
-          float target_fm = (smoothCMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
-          fm_mod = constrain(target_fm, 0.0f, 1.0f);
+          fm_mod = constrain((smoothCMod - CV_DEADZONE) / (1.0f - CV_DEADZONE), 0.0f, 1.0f);
           lockC = smoothCMod;
         }
       } else {
@@ -1369,25 +1301,32 @@ void loop1() {
           lockC = 0.0f;
         }
       }
-
+      timbre_locked = false;
+      color_locked = false;
+    } else {
+      // Default Behavior
+      timbre_in = pot_timbre;
+      color_in = pot_color;
+      timb_mod_cv = 0.0f;
+      color_mod_cv = 0.0f;
+      fm_mod = 0.0f;
       timbre_locked = false;
       color_locked = false;
     }
 
+    // --- 3. VALUE STABILISATION ---
+    int nextT = (int)(timbre_in * 127.0f + 0.5f);
+    int nextC = (int)(color_in * 127.0f + 0.5f);
+    static int lastStableT = -1, lastStableC = -1;
 
-    else {
-      smoothT += (rT - smoothT) * 0.08f;
-      smoothC += (rC - smoothC) * 0.08f;
-      timbre_in = smoothT;
-      color_in = smoothC;
-
-      // Zero out all CV-related variables
-      timb_mod_cv = 0.0f;
-      color_mod_cv = 0.0f;
-      fm_mod = 0.0f;
-
-      timbre_locked = false;
-      color_locked = false;
+    if (abs(nextT - lastStableT) > 1 || (nextT != lastStableT && (nextT == 0 || nextT == 127))) {
+      lastStableT = nextT;
+      displayTimbre = nextT;
+      engine_updated = true;
+    }
+    if (abs(nextC - lastStableC) > 1 || (nextC != lastStableC && (nextC == 0 || nextC == 127))) {
+      lastStableC = nextC;
+      displayColor = nextC;
       engine_updated = true;
     }
   }
@@ -1456,15 +1395,11 @@ void loop1() {
               if (!arp.latch_enabled) {
                 arp.clear();
 
-                // 2. IMPORTANT: Hard-kill any voices currently tied to the Arp
                 for (int i = 0; i < MAX_VOICES; i++) {
-                  // We set active to false to trigger the envelope release
                   voices[i].active = false;
-                  // If engine is 'hanging', force velocity to 0 or re-init
                   voices[i].sustained = false;
                 }
 
-                // 3. Reset the tracking array
                 arp.lastPitchCount = 0;
               }
               engine_updated = true;
