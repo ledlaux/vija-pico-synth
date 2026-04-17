@@ -1,3 +1,4 @@
+
 /*
   VIJA (v1.0.3) 
 
@@ -67,7 +68,7 @@
 #define I2S_BCLK_PIN 10
 #define SAMPLE_RATE 48000
 #define AUDIO_BLOCK 32
-#define MAX_VOICES 4
+#define MAX_VOICES 6
 
 #define USE_POTS 0
 #define POT_TIMBRE A0      // GPIO26
@@ -121,6 +122,7 @@ enum EncoderState { ENGINE_SELECT,
                     RELEASE_ADJUST,
                     ARP_TOGGLE,
                     ARP_MODE,
+                    ARP_OCTAVE,
                     ARP_DIV,
                     ARP_LATCH,
                     FILTER_TOGGLE,
@@ -193,9 +195,6 @@ volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
 volatile EncoderState enc_state = ENGINE_SELECT;
 
 volatile bool system_ready = false;
-
-volatile bool arp_latch_enabled = false;
-volatile int physicalKeysHeld = 0;
 
 // For UI updates
 float pot_timbre = 0.5f;
@@ -298,8 +297,11 @@ constexpr int NUM_ENGINES = sizeof(engine_names) / sizeof(engine_names[0]);
 
 struct Arpeggiator {
   volatile bool enabled = false;
+  volatile bool latch_enabled = false;
+  volatile int physicalKeys = 0;
   volatile ArpDirection mode = AS_PLAYED;
   volatile uint8_t division = 6;
+  volatile uint8_t octaves = 1;
 
   int heldNotes[MAX_ARP_NOTES];
   int sortedNotes[MAX_ARP_NOTES];
@@ -331,9 +333,18 @@ struct Arpeggiator {
   }
 
   void updateSort() {
-    for (int i = 0; i < numHeld; i++) sortedNotes[i] = heldNotes[i];
-    for (int i = 0; i < numHeld - 1; i++) {
-      for (int j = 0; j < numHeld - i - 1; j++) {
+    int count = 0;
+    // Fill the buffer with base notes + octave offsets
+    for (int oct = 0; oct < octaves; oct++) {
+      for (int i = 0; i < numHeld; i++) {
+        if (count < MAX_ARP_NOTES) {
+          sortedNotes[count++] = heldNotes[i] + (oct * 12);
+        }
+      }
+    }
+
+    for (int i = 0; i < count - 1; i++) {
+      for (int j = 0; j < count - i - 1; j++) {
         if (sortedNotes[j] > sortedNotes[j + 1]) {
           int temp = sortedNotes[j];
           sortedNotes[j] = sortedNotes[j + 1];
@@ -355,9 +366,14 @@ Arpeggiator arp;
 int findFreeVoice() {
   int oldest = 0;
   uint32_t old_age = voices[0].age;
+
+  // First, try to find a truly silent voice
   for (int i = 0; i < MAX_VOICES; i++) {
-    if (!voices[i].active && voices[i].env == 0.f)
-      return i;
+    if (!voices[i].active && voices[i].env == 0.f) return i;
+  }
+
+  // If none are silent, find the oldest active one to steal
+  for (int i = 0; i < MAX_VOICES; i++) {
     if (voices[i].age < old_age) {
       old_age = voices[i].age;
       oldest = i;
@@ -570,15 +586,22 @@ void drawEngineUI() {
     case VOLUME_ADJUST: sprintf(menuBuf, "VOL:%3d", int(master_volume * 100)); break;
     case ATTACK_ADJUST: sprintf(menuBuf, "A:%.2f", env_attack_s); break;
     case RELEASE_ADJUST: sprintf(menuBuf, "R:%.2f", env_release_s); break;
+
     case ARP_TOGGLE:
       sprintf(menuBuf, "ARP:%s", arp.enabled ? "ON" : "OFF");
       break;
+
     case ARP_MODE:
       {
         const char *modes[] = { "UP", "DOWN", "UPDN", "RAND", "CHRD", "PLAY" };
         sprintf(menuBuf, "MODE:%s", modes[arp.mode]);
         break;
       }
+
+    case ARP_OCTAVE:
+      sprintf(menuBuf, "OCT:%d", arp.octaves);
+      break;
+
     case ARP_DIV:
       {
         const char *divStr;
@@ -590,9 +613,11 @@ void drawEngineUI() {
         sprintf(menuBuf, "DIV:%s", divStr);
         break;
       }
+
     case ARP_LATCH:
-      sprintf(menuBuf, "LATCH:%s", arp_latch_enabled ? "ON" : "OFF");
+      sprintf(menuBuf, "LATCH:%s", arp.latch_enabled ? "ON" : "OFF");
       break;
+
     case FILTER_TOGGLE: sprintf(menuBuf, "FLT:%s", filter_enabled ? "ON" : "OFF"); break;
     case CV_MOD1: sprintf(menuBuf, "CV1:%s", cv_mod1 ? "ON" : "OFF"); break;
     case CV_MOD2: sprintf(menuBuf, "CV2:%s", cv_mod2 ? "ON" : "OFF"); break;
@@ -663,17 +688,18 @@ void __not_in_flash_func(triggerArpVoice)(int pitch) {
   voices[v].pitch = pitch;
   voices[v].velocity = 0.8f;
   voices[v].active = true;
-  voices[v].last_trig = false;
+  voices[v].env = 0.01f;
   voices[v].age = global_age++;
+  voices[v].last_trig = false;
 
-  // Track the voice index
   if (arp.lastPitchCount < MAX_VOICES) {
     arp.lastVoiceIndices[arp.lastPitchCount++] = v;
   }
 }
 
+
 void __not_in_flash_func(advanceArp)() {
-  // 1. Release previous voices by index
+  // 1. Kill old notes
   for (int i = 0; i < arp.lastPitchCount; i++) {
     int v = arp.lastVoiceIndices[i];
     if (v >= 0 && v < MAX_VOICES) {
@@ -684,50 +710,69 @@ void __not_in_flash_func(advanceArp)() {
 
   if (arp.numHeld == 0) return;
 
-  // 2. Chord Mode
-  if (arp.mode == CHORD) {
-    for (int i = 0; i < arp.numHeld && i < MAX_VOICES; i++) {
-      triggerArpVoice(arp.heldNotes[i]);
-    }
-  }
-  // 3. Sequential Modes
+  // // 2. CHORD MODE WITH OCTAVES
+  // if (arp.mode == CHORD) {
+  //   int notesTriggered = 0;
+  //   // Force nested loops to ensure base notes AND octaves play
+  //   for (int oct = 0; oct < arp.octaves; oct++) {
+  //     for (int i = 0; i < arp.numHeld; i++) {
+  //       if (notesTriggered >= MAX_VOICES) break;
+
+  //       int pitch = arp.heldNotes[i] + (oct * 12);
+  //       triggerArpVoice(pitch);
+  //       notesTriggered++;
+  //     }
+  //   }
+  // }
+
+  // 3. SEQUENTIAL MODES
   else {
-    if (arp.currentStep < 0 || arp.currentStep >= arp.numHeld) arp.currentStep = 0;
+    int totalNotes = arp.numHeld * arp.octaves;
+    if (totalNotes > MAX_ARP_NOTES) totalNotes = MAX_ARP_NOTES;
 
-    switch (arp.mode) {
-      case UP:
-      case AS_PLAYED:
-        arp.currentStep = (arp.currentStep + 1) % arp.numHeld;
-        break;
-      case DOWN:
-        arp.currentStep = (arp.currentStep <= 0) ? arp.numHeld - 1 : arp.currentStep - 1;
-        break;
-      case RANDOM:
-        arp.currentStep = random(0, arp.numHeld);
-        break;
-      case UP_DOWN:
-        if (arp.directionUp) {
-          arp.currentStep++;
-          if (arp.currentStep >= arp.numHeld - 1) {
-            arp.currentStep = arp.numHeld - 1;
-            arp.directionUp = false;
+    if (arp.currentStep < 0) {
+      arp.currentStep = 0;
+    } else {
+      switch (arp.mode) {
+        case UP:
+        case AS_PLAYED:
+          arp.currentStep = (arp.currentStep + 1) % totalNotes;
+          break;
+        case DOWN:
+          arp.currentStep = (arp.currentStep <= 0) ? totalNotes - 1 : arp.currentStep - 1;
+          break;
+        case RANDOM:
+          arp.currentStep = random(0, totalNotes);
+          break;
+        case UP_DOWN:
+          if (arp.directionUp) {
+            arp.currentStep++;
+            if (arp.currentStep >= totalNotes - 1) {
+              arp.currentStep = totalNotes - 1;
+              arp.directionUp = false;
+            }
+          } else {
+            arp.currentStep--;
+            if (arp.currentStep <= 0) {
+              arp.currentStep = 0;
+              arp.directionUp = true;
+            }
           }
-        } else {
-          arp.currentStep--;
-          if (arp.currentStep <= 0) {
-            arp.currentStep = 0;
-            arp.directionUp = true;
-          }
-        }
-        break;
+          break;
+      }
     }
 
-    // Safety bound
-    if (arp.currentStep < 0) arp.currentStep = 0;
-    if (arp.currentStep >= arp.numHeld) arp.currentStep = arp.numHeld - 1;
+    if (arp.currentStep >= totalNotes) arp.currentStep = 0;
 
-    int pitch = (arp.mode == AS_PLAYED) ? arp.heldNotes[arp.currentStep]
-                                        : arp.sortedNotes[arp.currentStep];
+    int pitch;
+    // Logic for AS_PLAYED/RANDOM to calculate octave on the fly
+    if (arp.mode == AS_PLAYED || arp.mode == RANDOM) {
+      int noteIdx = arp.currentStep % arp.numHeld;
+      int octIdx = arp.currentStep / arp.numHeld;
+      pitch = arp.heldNotes[noteIdx] + (octIdx * 12);
+    } else {
+      pitch = arp.sortedNotes[arp.currentStep];
+    }
     triggerArpVoice(pitch);
   }
 }
@@ -741,6 +786,7 @@ void __not_in_flash_func(handleMIDI)() {
   uint8_t status = 0, d1 = 0, d2 = 0;
   bool has_msg = false;
 
+  // --- 1. MIDI SOURCE HANDLING ---
 #if USE_UART_MIDI
   if (Serial1.available() > 0) {
     uint8_t byte = Serial1.read();
@@ -778,7 +824,7 @@ void __not_in_flash_func(handleMIDI)() {
   uint8_t packet[4];
   if (!has_msg && usb_midi.readPacket(packet)) {
     uint8_t cin = packet[0] & 0x0F;
-    if (cin == 0xF) {  // USB Real-time
+    if (cin == 0xF) {  // Real-time
       if (packet[1] == 0xF8 && arp.enabled) {
         arp.tickCounter++;
         if (arp.tickCounter >= arp.division) {
@@ -802,9 +848,10 @@ void __not_in_flash_func(handleMIDI)() {
   if (!has_msg || (status & 0x0F) != (midi_ch - 1)) return;
   uint8_t msgType = status & 0xF0;
 
+  // --- 2. CC HANDLING ---
   if (msgType == 0xB0) {
     switch (d1) {
-      case 64:  // Sustain Pedal
+      case 64:  // Sustain
         sustain_enabled = (d2 >= 64);
         if (!sustain_enabled && !arp.enabled) {
           for (int i = 0; i < MAX_VOICES; i++) {
@@ -815,26 +862,22 @@ void __not_in_flash_func(handleMIDI)() {
           }
         }
         break;
-
       case 7: master_volume = d2 / 127.f; break;
       case 8: engine_idx = map(d2, 0, 127, 0, NUM_ENGINES - 1); break;
-
-      case 9:  // Timbre Lock
+      case 9:
         if (midi_mod) {
           timbre_in = d2 / 127.f;
           timbre_locked = true;
           last_midi_lock_time = millis();
         }
         break;
-
-      case 10:  // Color Lock
+      case 10:
         if (midi_mod) {
           color_in = d2 / 127.f;
           color_locked = true;
           last_midi_lock_time = millis();
         }
         break;
-
       case 11: env_attack_s = 0.01f + (d2 / 127.f) * 2.f; break;
       case 12: env_release_s = 0.01f + (d2 / 127.f) * 3.f; break;
       case 71: filter_resonance_cc = d2; break;
@@ -845,13 +888,13 @@ void __not_in_flash_func(handleMIDI)() {
     return;
   }
 
+  // --- 3. NOTE HANDLING ---
   bool isNoteOff = (msgType == 0x80) || (msgType == 0x90 && d2 == 0);
 
   if (isNoteOff) {
     if (arp.enabled) {
-      if (physicalKeysHeld > 0) physicalKeysHeld--;
-      // Only remove the note if we aren't latching
-      if (!arp_latch_enabled) {
+      if (arp.physicalKeys > 0) arp.physicalKeys--;
+      if (!arp.latch_enabled) {
         arp.removeNote(d1);
       }
     } else {
@@ -863,12 +906,24 @@ void __not_in_flash_func(handleMIDI)() {
     }
   } else if (msgType == 0x90) {  // Note On
     if (arp.enabled) {
-      if (arp_latch_enabled && physicalKeysHeld == 0) {
+      // NEW CHORD REPLACEMENT LOGIC
+      if (arp.latch_enabled && arp.physicalKeys == 0) {
         arp.clear();
         for (int i = 0; i < MAX_VOICES; i++) voices[i].active = false;
+
+        // Reset sequence state for instant response
+        arp.currentStep = -1;
+        arp.tickCounter = arp.division;
       }
-      physicalKeysHeld++;
+
+      arp.physicalKeys++;
       arp.addNote(d1);
+
+      // INSTANT TRIGGER: Start playing immediately on the first key press
+      if (arp.physicalKeys == 1) {
+        advanceArp();
+        arp.tickCounter = 0;
+      }
     } else {
       int v = findFreeVoice();
       if (v >= 0) {
@@ -1376,6 +1431,14 @@ void loop1() {
               break;
             }
 
+          case ARP_OCTAVE:
+            if (step != 0) {
+              arp.octaves = constrain(arp.octaves + step, 1, 4);
+              arp.updateSort();  // Re-calculate the notes with new octaves
+              engine_updated = true;
+            }
+            break;
+
           case ARP_DIV:
             {
               // Toggle through 24 (1/4), 12 (1/8), 6 (1/16), 3 (1/32)
@@ -1388,17 +1451,16 @@ void loop1() {
 
           case ARP_LATCH:
             if (step != 0) {
-              arp_latch_enabled = !arp_latch_enabled;
+              arp.latch_enabled = !arp.latch_enabled;
 
-              if (!arp_latch_enabled) {
-                // 1. Clear the Arp internal buffer
+              if (!arp.latch_enabled) {
                 arp.clear();
 
                 // 2. IMPORTANT: Hard-kill any voices currently tied to the Arp
                 for (int i = 0; i < MAX_VOICES; i++) {
                   // We set active to false to trigger the envelope release
                   voices[i].active = false;
-                  // If your engine is 'hanging', force velocity to 0 or re-init
+                  // If engine is 'hanging', force velocity to 0 or re-init
                   voices[i].sustained = false;
                 }
 
@@ -1490,13 +1552,13 @@ void loop1() {
         break;
 
       case SETTINGS_MODE:
-        enc_state = (EncoderState)((enc_state + 1) % 14);
+        enc_state = (EncoderState)((enc_state + 1) % 15);
         engine_updated = true;
         break;
 
       case OSCILLOSCOPE_MODE:
         display_mode = SETTINGS_MODE;
-        enc_state = (EncoderState)((enc_state + 1) % 14);
+        enc_state = (EncoderState)((enc_state + 1) % 15);
         engine_updated = true;
         break;
     }
