@@ -306,7 +306,6 @@ struct Arpeggiator {
   volatile int numHeld = 0;
 
   int currentStep = -1;
-  // --- FIX: Add this line below ---
   int lastVoiceIndices[MAX_VOICES];
   int lastPitchCount = 0;
   bool directionUp = true;
@@ -571,18 +570,15 @@ void drawEngineUI() {
     case VOLUME_ADJUST: sprintf(menuBuf, "VOL:%3d", int(master_volume * 100)); break;
     case ATTACK_ADJUST: sprintf(menuBuf, "A:%.2f", env_attack_s); break;
     case RELEASE_ADJUST: sprintf(menuBuf, "R:%.2f", env_release_s); break;
-
     case ARP_TOGGLE:
       sprintf(menuBuf, "ARP:%s", arp.enabled ? "ON" : "OFF");
       break;
-
     case ARP_MODE:
       {
         const char *modes[] = { "UP", "DOWN", "UPDN", "RAND", "CHRD", "PLAY" };
         sprintf(menuBuf, "MODE:%s", modes[arp.mode]);
         break;
       }
-
     case ARP_DIV:
       {
         const char *divStr;
@@ -594,11 +590,9 @@ void drawEngineUI() {
         sprintf(menuBuf, "DIV:%s", divStr);
         break;
       }
-
     case ARP_LATCH:
       sprintf(menuBuf, "LATCH:%s", arp_latch_enabled ? "ON" : "OFF");
       break;
-
     case FILTER_TOGGLE: sprintf(menuBuf, "FLT:%s", filter_enabled ? "ON" : "OFF"); break;
     case CV_MOD1: sprintf(menuBuf, "CV1:%s", cv_mod1 ? "ON" : "OFF"); break;
     case CV_MOD2: sprintf(menuBuf, "CV2:%s", cv_mod2 ? "ON" : "OFF"); break;
@@ -737,7 +731,6 @@ void __not_in_flash_func(advanceArp)() {
     triggerArpVoice(pitch);
   }
 }
-
 
 
 void __not_in_flash_func(handleMIDI)() {
