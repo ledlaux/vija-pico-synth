@@ -65,7 +65,7 @@
 
 #define I2S_DATA_PIN 9
 #define I2S_BCLK_PIN 10
-#define SAMPLE_RATE 48000
+#define SAMPLE_RATE 32000
 #define AUDIO_BLOCK 32
 #define MAX_VOICES 6
 
@@ -75,9 +75,9 @@
 #define POT_TIMBRE_MOD A2  // GPIO28
 #define POT_COLOR_MOD A3   // GPIO29
 
-#define ENCODER_SW 13
-#define ENCODER_DT 14
-#define ENCODER_CLK 15
+#define ENCODER_SW 6
+#define ENCODER_DT 7
+#define ENCODER_CLK 8
 #define BUTTON_DEBOUNCE_MS 200
 #define LONG_PRESS_MS 1000
 
@@ -605,17 +605,32 @@ void drawEngineUI() {
       sprintf(menuBuf, "OCT:%d", arp.octaves);
       break;
 
+    // case ARP_DIV:
+    //   {
+    //     const char *divStr;
+    //     if (arp.division == 24) divStr = "1/4";
+    //     else if (arp.division == 12) divStr = "1/8";
+    //     else if (arp.division == 6) divStr = "1/16";
+    //     else if (arp.division == 3) divStr = "1/32";
+    //     else divStr = "??";
+    //     sprintf(menuBuf, "DIV:%s", divStr);
+    //     break;
+    //   }
+
     case ARP_DIV:
-      {
-        const char *divStr;
-        if (arp.division == 24) divStr = "1/4";
-        else if (arp.division == 12) divStr = "1/8";
-        else if (arp.division == 6) divStr = "1/16";
-        else if (arp.division == 3) divStr = "1/32";
-        else divStr = "??";
-        sprintf(menuBuf, "DIV:%s", divStr);
-        break;
-      }
+  {
+    const char *divStr;
+    if      (arp.division == 96) divStr = "1/1";
+    else if (arp.division == 48) divStr = "1/2";
+    else if (arp.division == 24) divStr = "1/4";
+    else if (arp.division == 12) divStr = "1/8";
+    else if (arp.division == 6)  divStr = "1/16";
+    else if (arp.division == 3)  divStr = "1/32";
+    else divStr = "??";
+    
+    sprintf(menuBuf, "DIV:%s", divStr);
+    break;
+  }
 
     case ARP_LATCH:
       sprintf(menuBuf, "LATCH:%s", arp.latch_enabled ? "ON" : "OFF");
@@ -1331,13 +1346,15 @@ void loop1() {
     }
   }
 
-  static int lClk = digitalRead(ENCODER_CLK);
+  // --- 4. ENCODER ---
+  static int lClk = HIGH; 
   int clk = digitalRead(ENCODER_CLK);
   static unsigned long last_enc_time = 0;
 
-  if (clk != lClk && millis() - last_enc_time > 8) {
+  if (lClk == HIGH && clk == LOW && (millis() - last_enc_time > 15)) {
     last_enc_time = millis();
-    int step = (digitalRead(ENCODER_DT) != clk) ? 1 : -1;
+    int step = (digitalRead(ENCODER_DT) == HIGH) ? 1 : -1; 
+    last_encoder_activity = millis();
 
     switch (display_mode) {
       case ENGINE_SELECT_MODE:
@@ -1378,13 +1395,25 @@ void loop1() {
             }
             break;
 
+          // case ARP_DIV:
+          //   {
+          //     // Toggle through 24 (1/4), 12 (1/8), 6 (1/16), 3 (1/32)
+          //     if (arp.division == 24) arp.division = 12;
+          //     else if (arp.division == 12) arp.division = 6;
+          //     else if (arp.division == 6) arp.division = 3;
+          //     else arp.division = 24;
+          //     break;
+          //   }
+
           case ARP_DIV:
             {
-              // Toggle through 24 (1/4), 12 (1/8), 6 (1/16), 3 (1/32)
-              if (arp.division == 24) arp.division = 12;
-              else if (arp.division == 12) arp.division = 6;
-              else if (arp.division == 6) arp.division = 3;
-              else arp.division = 24;
+              // Cycle: 1 -> 1/2 -> 1/4 -> 1/8 -> 1/16 -> 1/32
+              if (arp.division == 96)      arp.division = 48; // 1 to 1/2
+              else if (arp.division == 48) arp.division = 24; // 1/2 to 1/4
+              else if (arp.division == 24) arp.division = 12; // 1/4 to 1/8
+              else if (arp.division == 12) arp.division = 6;  // 1/8 to 1/16
+              else if (arp.division == 6)  arp.division = 3;  // 1/16 to 1/32
+              else arp.division = 96;                         // Reset to 1
               break;
             }
 
