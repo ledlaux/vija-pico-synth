@@ -50,7 +50,7 @@ The synthesizer operates in three primary display modes:
 
 - Timbre & Color (Soft takeover mode)
 
-  Align coresponding MIDI CC value with Timbre or Color pot value to release or vice versa (screen indicator)
+  Align coresponding MIDI CC with Timbre or Color POT value to release or vice versa (screen indicator)
     
 - CV1 & CV2 → Free for future functions
   
