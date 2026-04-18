@@ -1,8 +1,7 @@
-
 /*
-  VIJA (v1.0.2) 
+  VIJA (v1.0.3) 
 
-  Copyright (c) 2025 Vadims Maksimovs ledlaux.github.com | GPLv3
+  Copyright (c) 2026 Vadims Maksimovs ledlaux.github.com | GPLv3
   
   Raspberry PICO polyphonic synthesizer based on Mutable Instruments Braids macro oscillator 
   in semi-modular format.
@@ -13,7 +12,8 @@
   - USB or UART MIDI input
   - Filter (SVF)
   - OLED display with menu system & oscilloscope
-  - Synth controls via potentiometers or MIDI CC
+  - Synth controls via potentiometers, CV or MIDI CC
+  - Arpeggiator (midi sync)
   
   Hardware:
   - RP2040 or RP2350 board, I2S PCM5102 DAC, SSD1306 OLED, rotary encoder with button, 2 pots, 2 cv jacks or 2 more pots
@@ -23,14 +23,21 @@
 
   Compilation:
 
-  RP2040: - Optimize: Optimize Even More (-O3)
-          - CPU Speed: 200-240mhz (Overclock) depending on the sample rate and needed voice count   
-          - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
-  RP2350:
-         - Optimize: Optimize Even More (-O3)
-         - Sample rate: 48000
+    RP2040: 
+            - Flash size: 2MB (Sketch:1MB, FS:1MB)
+            - CPU Speed: 240mhz (Overclock)  
+            - Optimize: Optimize Even More (-O3)
+            - USB stack: Adafruit TinyUSB 
+            - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
+
+    RP2350:
+            - Flash size: 4MB (Sketch:1MB, FS:3MB)
+            - CPU Speed: 240mhz (Overclock)  
+            - Optimize: Optimize Even More (-O3)
+            - USB stack: Adafruit TinyUSB 
+            - Sample rate: 48000
   
-  Software:
+  Source code:
  - BRAIDS and STMLIB libraries ported by Mark Washeim:
   https://github.com/poetaster/arduinoMI (MIT License)
 
@@ -67,26 +74,28 @@
 #define I2S_BCLK_PIN 10
 #define SAMPLE_RATE 32000
 #define AUDIO_BLOCK 32
-#define MAX_VOICES 4
+#define MAX_VOICES 6
 
-#define USE_POTS 1
+#define USE_POTS 0
 #define POT_TIMBRE A0      // GPIO26
 #define POT_COLOR A1       // GPIO27
 #define POT_TIMBRE_MOD A2  // GPIO28
 #define POT_COLOR_MOD A3   // GPIO29
 
-#define ENCODER_CLK 2
-#define ENCODER_DT 3
-#define ENCODER_SW 4
-#define BUTTON_DEBOUNCE_MS 200
+#define ENCODER_SW 6
+#define ENCODER_DT 7
+#define ENCODER_CLK 8
+#define BUTTON_DEBOUNCE_MS 150
 #define LONG_PRESS_MS 1000
+// #define MENU_EXIT_TIMEOUT
+#define TIMEOUT_MS 30000
 
-#define USE_UART_MIDI 1  // 0 = USB MIDI, 1 = UART MIDI
-#define MIDI_UART_RX 13
+#define USE_UART_MIDI 0  // 0 = USB MIDI, 1 = UART MIDI
+#define MIDI_UART_RX 1
 
 #define USE_SCREEN 1
-#define OLED_SDA 0
-#define OLED_SCL 1
+#define OLED_SDA 4
+#define OLED_SCL 5
 #define SCOPE_WIDTH 128
 
 // Splash screen
@@ -119,12 +128,26 @@ enum EncoderState { ENGINE_SELECT,
                     VOLUME_ADJUST,
                     ATTACK_ADJUST,
                     RELEASE_ADJUST,
+                    ARP_TOGGLE,
+                    ARP_MODE,
+                    ARP_DIV,
+                    ARP_OCTAVE,
+                    ARP_LATCH,
                     FILTER_TOGGLE,
                     MIDI_MOD,
                     CV_MOD1,
                     CV_MOD2,
                     MIDI_CH,
                     SCOPE_TOGGLE };
+
+
+#define MAX_ARP_NOTES 12
+
+enum ArpDirection { UP,
+                    DOWN,
+                    UP_DOWN,
+                    RANDOM,
+                    AS_PLAYED };
 
 volatile uint8_t midi_ch = 1;
 volatile int engine_idx = 1;
@@ -150,7 +173,7 @@ volatile bool env_params_changed = true;
 volatile unsigned long last_param_change = 0;
 unsigned long last_midi_lock_time = 0;
 
-volatile bool midi_mod = false;
+volatile bool midi_mod = true;
 volatile bool cv_mod1 = false;
 volatile bool cv_mod2 = false;
 
@@ -159,7 +182,7 @@ volatile float color_midi_target = 0.0f;
 volatile bool timbre_locked = false;
 volatile bool color_locked = false;
 
-volatile bool filter_enabled = true;
+volatile bool filter_enabled = false;
 volatile float filter_mix = 1.0f;
 volatile uint8_t filter_cutoff_cc = 64;
 volatile uint8_t filter_resonance_cc = 32;
@@ -177,6 +200,9 @@ const unsigned long AUTO_REVERT_MS = 4000;
 volatile unsigned long last_encoder_activity = 0;
 volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
 volatile EncoderState enc_state = ENGINE_SELECT;
+
+volatile int displayTimbre = 0;
+volatile int displayColor = 0;
 
 volatile bool system_ready = false;
 
@@ -207,6 +233,14 @@ struct Voice {
   bool sustained;
 };
 
+struct ArpSettings {
+  bool enabled;
+  bool latch;
+  uint8_t mode;
+  uint8_t division;
+  uint8_t octaves;
+};
+
 struct SynthSettings {
   float master_volume;
   float env_attack_s;
@@ -223,6 +257,7 @@ struct SynthSettings {
   uint8_t midi_ch;
   EncoderState enc_state;
   bool oscilloscope_enabled;
+  ArpSettings arp_set;
 };
 
 // Default settings for the first run
@@ -231,8 +266,8 @@ SynthSettings settings = {
   .env_attack_s = 0.009f,
   .env_release_s = 0.01f,
   .engine_idx = 1,
-  .filter_enabled = true,
-  .midi_mod = false,
+  .filter_enabled = false,
+  .midi_mod = true,
   .cv_mod1 = false,
   .cv_mod2 = false,
   .timbre_in = 0.4f,
@@ -241,7 +276,13 @@ SynthSettings settings = {
   .color_mod_cv = 0.0f,
   .midi_ch = 1,
   .enc_state = ENGINE_SELECT,
-  .oscilloscope_enabled = true
+  .oscilloscope_enabled = true,
+  .arp_set = {
+    .enabled = false,
+    .latch = false,
+    .mode = AS_PLAYED,
+    .division = 6,  // 1/16 default
+    .octaves = 2 }
 };
 
 Voice voices[MAX_VOICES];
@@ -279,13 +320,88 @@ const char *const engine_names[] = {
 
 constexpr int NUM_ENGINES = sizeof(engine_names) / sizeof(engine_names[0]);
 
+const uint8_t arpDivTable[] = { 96, 48, 24, 18, 12, 9, 8, 6, 4, 3 };
+const int NUM_DIVS = 10;
 
-int findFreeVoice() {
+struct Arpeggiator {
+  volatile bool enabled = false;
+  volatile bool latch_enabled = false;
+  volatile int physicalKeys = 0;
+  volatile ArpDirection mode = AS_PLAYED;
+  volatile uint8_t division = 6;
+  volatile uint8_t octaves = 1;
+
+  int heldNotes[MAX_ARP_NOTES];
+  int sortedNotes[MAX_ARP_NOTES];
+  volatile int numHeld = 0;
+
+  int currentStep = -1;
+  int lastVoiceIndices[MAX_VOICES];
+  int lastPitchCount = 0;
+  bool directionUp = true;
+  uint32_t tickCounter = 0;
+
+  void __not_in_flash_func(addNote)(int pitch) {
+    if (numHeld < MAX_ARP_NOTES) {
+      heldNotes[numHeld++] = pitch;
+      updateSort();
+    }
+  }
+
+  void __not_in_flash_func(removeNote)(int pitch) {
+    for (int i = 0; i < numHeld; i++) {
+      if (heldNotes[i] == pitch) {
+        for (int j = i; j < numHeld - 1; j++) heldNotes[j] = heldNotes[j + 1];
+        numHeld--;
+        updateSort();
+        break;
+      }
+    }
+    if (numHeld == 0) currentStep = -1;
+  }
+
+  void __not_in_flash_func(updateSort)() {
+    int count = 0;
+    // Fill the buffer with base notes + octave offsets
+    for (int oct = 0; oct < octaves; oct++) {
+      for (int i = 0; i < numHeld; i++) {
+        if (count < MAX_ARP_NOTES) {
+          sortedNotes[count++] = heldNotes[i] + (oct * 12);
+        }
+      }
+    }
+
+    for (int i = 0; i < count - 1; i++) {
+      for (int j = 0; j < count - i - 1; j++) {
+        if (sortedNotes[j] > sortedNotes[j + 1]) {
+          int temp = sortedNotes[j];
+          sortedNotes[j] = sortedNotes[j + 1];
+          sortedNotes[j + 1] = temp;
+        }
+      }
+    }
+  }
+
+  void __not_in_flash_func(clear)() {
+    numHeld = 0;
+    currentStep = -1;
+    lastPitchCount = 0;
+  }
+};
+
+Arpeggiator arp;
+
+int __not_in_flash_func(findFreeVoice)() {
   int oldest = 0;
   uint32_t old_age = voices[0].age;
+
+  // First, try to find a truly silent voice
   for (int i = 0; i < MAX_VOICES; i++) {
-    if (!voices[i].active && voices[i].env == 0.f)
-      return i;
+    if (!voices[i].active && voices[i].env == 0.f) return i;
+  }
+
+  // If none are silent, find the oldest active one to steal
+  for (int i = 0; i < MAX_VOICES; i++) {
     if (voices[i].age < old_age) {
       old_age = voices[i].age;
       oldest = i;
@@ -295,7 +411,7 @@ int findFreeVoice() {
 }
 
 
-int findVoiceByPitch(int pitch) {
+int __not_in_flash_func(findVoiceByPitch)(int pitch) {
   for (int i = 0; i < MAX_VOICES; i++)
     if (voices[i].active && voices[i].pitch == pitch) return i;
   return -1;
@@ -398,18 +514,6 @@ void __not_in_flash_func(updateAudio)() {
     }
   }
 
-  // static int scope_idx = 0;
-  // if (oscilloscope_enabled && !scope_ready) {
-  //   for (int i = 0; i < AUDIO_BLOCK; i += 8) {
-  //     scope_buffer_front[scope_idx++] = mix[i];
-  //     if (scope_idx >= SCOPE_WIDTH) {
-  //       memcpy((void *)scope_buffer_back, (void *)scope_buffer_front, sizeof(scope_buffer_back));
-  //       scope_ready = true;
-  //       scope_idx = 0;
-  //       break;
-  //     }
-  //   }
-  // }
 
   static int scope_idx = 0;
   static float scopeSmooth = 0.0f;
@@ -510,6 +614,46 @@ void drawEngineUI() {
     case VOLUME_ADJUST: sprintf(menuBuf, "VOL:%3d", int(master_volume * 100)); break;
     case ATTACK_ADJUST: sprintf(menuBuf, "A:%.2f", env_attack_s); break;
     case RELEASE_ADJUST: sprintf(menuBuf, "R:%.2f", env_release_s); break;
+
+    case ARP_TOGGLE:
+      sprintf(menuBuf, "ARP:%s", arp.enabled ? "ON" : "OFF");
+      break;
+
+    case ARP_MODE:
+      {
+        const char *modes[] = { "UP", "DOWN", "UPDN", "PLAY", "RAND" };
+        sprintf(menuBuf, "MODE:%s", modes[arp.mode]);
+        break;
+      }
+
+    case ARP_DIV:
+      {
+        const char *divStr;
+        switch (arp.division) {
+          case 96: divStr = "1/1"; break;
+          case 48: divStr = "1/2"; break;
+          case 24: divStr = "1/4"; break;
+          case 18: divStr = "1/8."; break;
+          case 12: divStr = "1/8"; break;
+          case 9: divStr = "1/16."; break;
+          case 8: divStr = "1/8T"; break;
+          case 6: divStr = "1/16"; break;
+          case 4: divStr = "1/16T"; break;
+          case 3: divStr = "1/32"; break;
+          default: divStr = "1/2"; break;
+        }
+        sprintf(menuBuf, "DIV:%s", divStr);
+        break;
+      }
+
+    case ARP_OCTAVE:
+      sprintf(menuBuf, "OCT:%d", arp.octaves);
+      break;
+
+    case ARP_LATCH:
+      sprintf(menuBuf, "LATCH:%s", arp.latch_enabled ? "ON" : "OFF");
+      break;
+
     case FILTER_TOGGLE: sprintf(menuBuf, "FLT:%s", filter_enabled ? "ON" : "OFF"); break;
     case CV_MOD1: sprintf(menuBuf, "CV1:%s", cv_mod1 ? "ON" : "OFF"); break;
     case CV_MOD2: sprintf(menuBuf, "CV2:%s", cv_mod2 ? "ON" : "OFF"); break;
@@ -533,19 +677,23 @@ void drawEngineUI() {
 
   if (!cv_mod1) {
     char buf[16];
-    int tVal = int((timbre_locked ? timbre_in : pot_timbre) * 127);
-    int mVal = int((color_locked ? color_in : pot_color) * 127);
+
+    int tVal = displayTimbre;
+    int mVal = displayColor;
+
+    if (timbre_locked) tVal = (int)(timbre_in * 127);
+    if (color_locked) mVal = (int)(color_in * 127);
+
     sprintf(buf, "T:%3d C:%3d", tVal, mVal);
 
-    int16_t x1, y1;
-    uint16_t w, h;
-    display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
-    display.setCursor(128 - w - 2, 55);
+    int16_t tx, ty;
+    uint16_t tw, th;
+    display.getTextBounds(buf, 0, 0, &tx, &ty, &tw, &th);
+    display.setCursor(128 - tw - 2, 55);
     display.print(buf);
   }
   display.display();
 }
-
 
 void drawSplash() {
 
@@ -564,13 +712,95 @@ void drawSplash() {
   display.getTextBounds(subtitle, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 40);
   display.println(subtitle);
-  const char *version = "v1.0.2";
+  const char *version = "v1.0.3";
   display.getTextBounds(version, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 54);
   display.println(version);
   display.display();
 }
 #endif
+
+
+void __not_in_flash_func(triggerArpVoice)(int pitch) {
+  int v = findFreeVoice();
+  if (v < 0) return;
+
+  voices[v].pitch = pitch;
+  voices[v].velocity = 0.8f;
+  voices[v].active = true;
+  voices[v].env = 0.01f;
+  voices[v].age = global_age++;
+  voices[v].last_trig = false;
+
+  if (arp.lastPitchCount < MAX_VOICES) {
+    arp.lastVoiceIndices[arp.lastPitchCount++] = v;
+  }
+}
+
+
+void __not_in_flash_func(advanceArp)() {
+  // 1. Kill old notes
+  for (int i = 0; i < arp.lastPitchCount; i++) {
+    int v = arp.lastVoiceIndices[i];
+    if (v >= 0 && v < MAX_VOICES) {
+      voices[v].active = false;
+    }
+  }
+  arp.lastPitchCount = 0;
+
+  if (arp.numHeld == 0) return;
+
+  // 3. SEQUENTIAL MODES
+  else {
+    int totalNotes = arp.numHeld * arp.octaves;
+    if (totalNotes > MAX_ARP_NOTES) totalNotes = MAX_ARP_NOTES;
+
+    if (arp.currentStep < 0) {
+      arp.currentStep = 0;
+    } else {
+      switch (arp.mode) {
+        case UP:
+        case AS_PLAYED:
+          arp.currentStep = (arp.currentStep + 1) % totalNotes;
+          break;
+        case DOWN:
+          arp.currentStep = (arp.currentStep <= 0) ? totalNotes - 1 : arp.currentStep - 1;
+          break;
+        case RANDOM:
+          arp.currentStep = random(0, totalNotes);
+          break;
+        case UP_DOWN:
+          if (arp.directionUp) {
+            arp.currentStep++;
+            if (arp.currentStep >= totalNotes - 1) {
+              arp.currentStep = totalNotes - 1;
+              arp.directionUp = false;
+            }
+          } else {
+            arp.currentStep--;
+            if (arp.currentStep <= 0) {
+              arp.currentStep = 0;
+              arp.directionUp = true;
+            }
+          }
+          break;
+      }
+    }
+
+    if (arp.currentStep >= totalNotes) arp.currentStep = 0;
+
+    int pitch;
+    // Logic for AS_PLAYED/RANDOM to calculate octave on the fly
+    if (arp.mode == AS_PLAYED || arp.mode == RANDOM) {
+      int noteIdx = arp.currentStep % arp.numHeld;
+      int octIdx = arp.currentStep / arp.numHeld;
+      pitch = arp.heldNotes[noteIdx] + (octIdx * 12);
+    } else {
+      pitch = arp.sortedNotes[arp.currentStep];
+    }
+    triggerArpVoice(pitch);
+  }
+}
 
 
 void __not_in_flash_func(handleMIDI)() {
@@ -581,96 +811,92 @@ void __not_in_flash_func(handleMIDI)() {
   uint8_t status = 0, d1 = 0, d2 = 0;
   bool has_msg = false;
 
+  // --- 1. MIDI SOURCE HANDLING ---
 #if USE_UART_MIDI
-  if (Serial1.available() == 0) return;
-
-  uint8_t byte = Serial1.read();
-
-  if (byte >= 0xF8) return;
-
-  if (byte & 0x80) {
-    running_status = byte;
-    data_idx = 0;
-    return;
-  }
-
-  if (running_status == 0) return;
-  if (data_idx < 2) data_bytes[data_idx++] = byte;
-  uint8_t type = running_status & 0xF0;
-  uint8_t expected_len = (type == 0xC0 || type == 0xD0) ? 1 : 2;
-
-  if (data_idx < expected_len) return;
-
-  status = running_status;
-  d1 = data_bytes[0];
-  d2 = (expected_len == 2) ? data_bytes[1] : 0;
-  data_idx = 0;
-  has_msg = true;
-
-  // --- Special CC64 sustain handling ---
-  if ((status & 0xF0) == 0xB0 && d1 == 64) {
-    if (d2 >= 64) {
-      sustain_enabled = true;
-    } else {
-      sustain_enabled = false;
-      for (int i = 0; i < MAX_VOICES; i++) {
-        if (voices[i].sustained) {
-          voices[i].active = false;
-          voices[i].sustained = false;
+  if (Serial1.available() > 0) {
+    uint8_t byte = Serial1.read();
+    if (byte >= 0xF8) {
+      if (byte == 0xF8 && arp.enabled) {  // Clock
+        arp.tickCounter++;
+        if (arp.tickCounter >= arp.division) {
+          arp.tickCounter = 0;
+          advanceArp();
         }
+      } else if (byte == 0xFA || byte == 0xFB) {  // Start/Continue
+        arp.tickCounter = arp.division;
+        arp.currentStep = -1;
+      }
+      return;
+    }
+    if (byte & 0x80) {
+      running_status = byte;
+      data_idx = 0;
+    } else if (running_status != 0) {
+      if (data_idx < 2) data_bytes[data_idx++] = byte;
+      uint8_t type = running_status & 0xF0;
+      uint8_t len = (type == 0xC0 || type == 0xD0) ? 1 : 2;
+      if (data_idx == len) {
+        status = running_status;
+        d1 = data_bytes[0];
+        d2 = (len == 2) ? data_bytes[1] : 0;
+        data_idx = 0;
+        has_msg = true;
       }
     }
-    return;
   }
-
-#else  // USB MIDI
-  uint8_t packet[4];
-  if (!usb_midi.readPacket(packet)) return;
-
-  uint8_t cin = packet[0] & 0x0F;
-  if (cin < 0x8 || cin > 0xE) return;
-
-  status = packet[1];
-  d1 = packet[2];
-  d2 = packet[3];
-  has_msg = true;
 #endif
 
-  if (!has_msg) return;
-  if ((status & 0x80) == 0) return;
-  if ((status & 0x0F) != (midi_ch - 1)) return;
-
-  bool isNoteOff = ((status & 0xF0) == 0x80) || ((status & 0xF0) == 0x90 && d2 == 0);
-
-  if (isNoteOff) {
-    int i = findVoiceByPitch(d1);
-    if (i >= 0) {
-      if (sustain_enabled) {
-        voices[i].sustained = true;
-        voices[i].active = false;
-      } else {
-        voices[i].active = false;
-        voices[i].sustained = false;
+  uint8_t packet[4];
+  if (!has_msg && usb_midi.readPacket(packet)) {
+    uint8_t cin = packet[0] & 0x0F;
+    if (cin == 0xF) {  // Real-time
+      if (packet[1] == 0xF8 && arp.enabled) {
+        arp.tickCounter++;
+        if (arp.tickCounter >= arp.division) {
+          arp.tickCounter = 0;
+          advanceArp();
+        }
+      } else if (packet[1] == 0xFA || packet[1] == 0xFB) {
+        arp.tickCounter = arp.division;
+        arp.currentStep = -1;
       }
+      return;
     }
-  } else if ((status & 0xF0) == 0x90) {
-    int i = findFreeVoice();
-    voices[i].pitch = d1;
-    voices[i].velocity = d2 / 127.f;
-    voices[i].active = true;
-    voices[i].age = global_age++;
-  } else if ((status & 0xF0) == 0xB0) {
+    if (cin >= 0x8 && cin <= 0xE) {
+      status = packet[1];
+      d1 = packet[2];
+      d2 = packet[3];
+      has_msg = true;
+    }
+  }
+
+  if (!has_msg || (status & 0x0F) != (midi_ch - 1)) return;
+  uint8_t msgType = status & 0xF0;
+
+  // --- 2. CC HANDLING ---
+  if (msgType == 0xB0) {
     switch (d1) {
+      case 64:  // Sustain
+        sustain_enabled = (d2 >= 64);
+        if (!sustain_enabled && !arp.enabled) {
+          for (int i = 0; i < MAX_VOICES; i++) {
+            if (voices[i].sustained) {
+              voices[i].active = false;
+              voices[i].sustained = false;
+            }
+          }
+        }
+        break;
       case 7: master_volume = d2 / 127.f; break;
       case 8: engine_idx = map(d2, 0, 127, 0, NUM_ENGINES - 1); break;
-      case 9:  // Timbre
+      case 9:
         if (midi_mod) {
           timbre_in = d2 / 127.f;
           timbre_locked = true;
           last_midi_lock_time = millis();
         }
         break;
-      case 10:  // Color
+      case 10:
         if (midi_mod) {
           color_in = d2 / 127.f;
           color_locked = true;
@@ -681,12 +907,56 @@ void __not_in_flash_func(handleMIDI)() {
       case 12: env_release_s = 0.01f + (d2 / 127.f) * 3.f; break;
       case 71: filter_resonance_cc = d2; break;
       case 74: filter_cutoff_cc = d2; break;
-      case 15: fm_mod = d2 / 127.f; break;
-      case 16: timb_mod_midi = d2 / 127.f; break;
-      case 17: color_mod_midi = d2 / 127.f; break;
     }
     engine_updated = true;
     last_param_change = millis();
+    return;
+  }
+
+  // --- 3. NOTE HANDLING ---
+  bool isNoteOff = (msgType == 0x80) || (msgType == 0x90 && d2 == 0);
+
+  if (isNoteOff) {
+    if (arp.enabled) {
+      if (arp.physicalKeys > 0) arp.physicalKeys--;
+      if (!arp.latch_enabled) {
+        arp.removeNote(d1);
+      }
+    } else {
+      int i = findVoiceByPitch(d1);
+      if (i >= 0) {
+        if (sustain_enabled) voices[i].sustained = true;
+        voices[i].active = false;
+      }
+    }
+  } else if (msgType == 0x90) {  // Note On
+    if (arp.enabled) {
+      if (arp.latch_enabled && arp.physicalKeys == 0) {
+        arp.clear();
+        for (int i = 0; i < MAX_VOICES; i++) voices[i].active = false;
+
+        // Reset sequence state for instant response
+        arp.currentStep = -1;
+        arp.tickCounter = arp.division;
+      }
+
+      arp.physicalKeys++;
+      arp.addNote(d1);
+
+      // INSTANT TRIGGER: Start playing immediately on the first key press
+      if (arp.physicalKeys == 1) {
+        advanceArp();
+        arp.tickCounter = 0;
+      }
+    } else {
+      int v = findFreeVoice();
+      if (v >= 0) {
+        voices[v].pitch = d1;
+        voices[v].velocity = d2 / 127.f;
+        voices[v].active = true;
+        voices[v].age = global_age++;
+      }
+    }
   }
 }
 
@@ -716,6 +986,11 @@ void saveSettings() {
   doc["ch"] = settings.midi_ch;
   doc["enc"] = (int)settings.enc_state;
   doc["osc"] = settings.oscilloscope_enabled;
+  doc["arp_on"] = settings.arp_set.enabled;
+  doc["arp_lat"] = settings.arp_set.latch;
+  doc["arp_mode"] = (uint8_t)settings.arp_set.mode;
+  doc["arp_div"] = settings.arp_set.division;
+  doc["arp_oct"] = settings.arp_set.octaves;
 
   File f = LittleFS.open(SETTINGS_FILE, "w");
   if (!f) return;
@@ -755,6 +1030,11 @@ void loadSettings() {
   settings.midi_ch = doc["ch"] | 1;
   settings.enc_state = (EncoderState)(doc["enc"] | 0);
   settings.oscilloscope_enabled = doc["osc"] | true;
+  settings.arp_set.enabled = doc["arp_on"] | false;
+  settings.arp_set.latch = doc["arp_lat"] | false;
+  settings.arp_set.mode = (ArpDirection)(doc["arp_mode"] | AS_PLAYED);
+  settings.arp_set.division = doc["arp_div"] | 6;
+  settings.arp_set.octaves = doc["arp_oct"] | 1;
 
   master_volume = settings.master_volume;
   env_attack_s = settings.env_attack_s;
@@ -771,6 +1051,14 @@ void loadSettings() {
   midi_ch = settings.midi_ch;
   enc_state = settings.enc_state;
   oscilloscope_enabled = settings.oscilloscope_enabled;
+
+  arp.enabled = settings.arp_set.enabled;
+  arp.latch_enabled = settings.arp_set.latch;
+  arp.mode = (ArpDirection)settings.arp_set.mode;
+  arp.division = settings.arp_set.division;
+  arp.octaves = settings.arp_set.octaves;
+  arp.tickCounter = 0;
+  arp.currentStep = -1;
 
   lastSavedSettings = settings;
   engine_updated = true;
@@ -831,6 +1119,12 @@ void saveButton() {
       settings.midi_ch = midi_ch;
       settings.oscilloscope_enabled = oscilloscope_enabled;
 
+      settings.arp_set.enabled = arp.enabled;
+      settings.arp_set.latch = arp.latch_enabled;
+      settings.arp_set.mode = (uint8_t)arp.mode;
+      settings.arp_set.division = arp.division;
+      settings.arp_set.octaves = arp.octaves;
+
       saveSettings();  // This now ONLY clicks if data changed
       has_saved_this_press = true;
     }
@@ -860,7 +1154,18 @@ void setup() {
     fs_ready = true;
   }
 
-  usb_midi.begin();
+
+  //  MIDI Initialization
+  if (USE_UART_MIDI == 1) {
+    Serial1.setRX(MIDI_UART_RX);
+    Serial1.begin(31250);
+  } else {
+    TinyUSBDevice.setManufacturerDescriptor("LEDLAUX");
+    TinyUSBDevice.setProductDescriptor("VIJA");
+    TinyUSBDevice.setSerialDescriptor("PICO0");
+    usb_midi.begin();
+  }
+
   i2s_output.setFrequency(SAMPLE_RATE);
   i2s_output.setDATA(I2S_DATA_PIN);
   i2s_output.setBCLK(I2S_BCLK_PIN);
@@ -902,8 +1207,6 @@ void loop() {
 
 
 void setup1() {
-  Serial1.setRX(MIDI_UART_RX);
-  Serial1.begin(31250);
   pinMode(ENCODER_CLK, INPUT_PULLUP);
   pinMode(ENCODER_DT, INPUT_PULLUP);
   pinMode(ENCODER_SW, INPUT_PULLUP);
@@ -924,7 +1227,6 @@ void setup1() {
   system_ready = true;
 }
 
-
 void loop1() {
   saveButton();
 #if USE_SCREEN
@@ -939,7 +1241,19 @@ void loop1() {
   static float smoothRes = 0.25f;
   static unsigned long last_pot_read = 0;
 
-  if (millis() - last_pot_read > 4) {
+
+  static unsigned long last_btn_time = 0;
+  static unsigned long last_click_time = 0;
+  static unsigned long btnDownTime = 0;
+  static bool btnIsDown = false;
+  static bool longPressExecuted = false;
+  static bool saveExecuted = false;
+  static bool click_pending = false;
+  static int lBtn = HIGH;
+
+
+  // --- 1. POTENTIOMETER & MODULATION PROCESSING ---
+  if (millis() - last_pot_read > 10) {
     last_pot_read = millis();
 
     float rT = analogRead(POT_TIMBRE) / 1023.0f;
@@ -947,116 +1261,50 @@ void loop1() {
     float srcT = analogRead(POT_TIMBRE_MOD) / 1023.0f;
     float srcC = analogRead(POT_COLOR_MOD) / 1023.0f;
 
-    const float SMOOTH_POT = 0.06f;
-    pot_timbre += (rT - pot_timbre) * SMOOTH_POT;
-    pot_color += (rC - pot_color) * SMOOTH_POT;
+    const float SMOOTH_BASE = 0.05f;
+    pot_timbre += (rT - pot_timbre) * SMOOTH_BASE;
+    pot_color += (rC - pot_color) * SMOOTH_BASE;
 
-    if (pot_timbre > 0.999f) pot_timbre = 1.0f;
-    if (pot_timbre < 0.001f) pot_timbre = 0.0f;
-
-    if (pot_color > 0.999f) pot_color = 1.0f;
-    if (pot_color < 0.001f) pot_color = 0.0f;
-
-    int valT = (int)(pot_timbre * 127.0f + 0.5f);
-    int valC = (int)(pot_color * 127.0f + 0.5f);
-
-
-    if (!midi_mod) {
-      timbre_locked = false;
-      color_locked = false;
-      engine_updated = true;
-    }
-
-
+    // --- 2. MODES ---
     if (cv_mod1) {
-
-      // --- Smooth the potentiometer inputs (depth controls) ---
       smoothT += (rT - smoothT) * 0.15f;
       smoothC += (rC - smoothC) * 0.15f;
-
-      // --- Smooth the modulation sources ---
-      smoothTMod += (srcT - smoothTMod) * 0.1f;  // slower smoothing
+      smoothTMod += (srcT - smoothTMod) * 0.1f;
       smoothCMod += (srcC - smoothCMod) * 0.1f;
-
-      // --- Apply modulation depth with soft scaling ---
       timb_mod_cv += ((smoothT * smoothTMod) - timb_mod_cv) * 0.05f;
       color_mod_cv += ((smoothC * smoothCMod) - color_mod_cv) * 0.05f;
-
-      // --- Set base values for other modes ---
       timbre_in = 0.5f;
       color_in = 0.5f;
-      engine_updated = true;
-
-    }
-
-    else if (midi_mod) {
-
-      // -------- TIMBRE --------
-      if (timbre_locked) {
-        if (fabsf(rT - timbre_in) < 0.01f) {
-          timbre_locked = false;
-          smoothT = rT;
-        }
-      }
-
+    } else if (midi_mod) {
+      if (timbre_locked && fabsf(rT - timbre_in) < 0.05f) timbre_locked = false;
       if (!timbre_locked) {
         smoothT += (rT - smoothT) * 0.15f;
         timbre_in = smoothT;
       }
-
-      // -------- COLOR --------
-      if (color_locked) {
-        if (fabsf(rC - color_in) < 0.01f) {
-          color_locked = false;
-          smoothC = rC;
-        }
-      }
-
+      if (color_locked && fabsf(rC - color_in) < 0.05f) color_locked = false;
       if (!color_locked) {
         smoothC += (rC - smoothC) * 0.15f;
         color_in = smoothC;
       }
-
-      engine_updated = true;
-    }
-
-    else if (filter_enabled) {
-      // --- Update filter CVs from modulation pots ---
+    } else if (filter_enabled) {
       smoothCut += (srcT - smoothCut) * 0.1f;
       smoothRes += (srcC - smoothRes) * 0.1f;
-
       filter_cutoff_cc = (uint8_t)(smoothCut * 127.0f);
       filter_resonance_cc = (uint8_t)(smoothRes * 127.0f);
-
-      // --- Keep Timbre and Color pots working as default ---
       smoothT += (rT - smoothT) * 0.08f;
       smoothC += (rC - smoothC) * 0.08f;
-
       timbre_in = smoothT;
       color_in = smoothC;
-
-      // --- Decay any modulation CV influence smoothly ---
-      timb_mod_cv *= 0.9f;
-      color_mod_cv *= 0.9f;
-
-      // --- FM is inactive in filter mode ---
-      fm_target = 0.0f;
-      engine_updated = true;
-
     }
 
     else if (cv_mod2) {
-
       smoothT += (rT - smoothT) * 0.08f;
       smoothC += (rC - smoothC) * 0.08f;
       timbre_in = smoothT;
       color_in = smoothC;
 
-      // --- 2. Rolling Average Filter ---
-      static float historyT[16];
-      static float historyC[16];
+      static float historyT[16], historyC[16];
       static int histIdx = 0;
-
       historyT[histIdx] = srcT;
       historyC[histIdx] = srcC;
       histIdx = (histIdx + 1) % 16;
@@ -1066,27 +1314,20 @@ void loop1() {
         avgT += historyT[i];
         avgC += historyC[i];
       }
-      avgT /= 16.0f;
-      avgC /= 16.0f;
+      smoothTMod += ((avgT / 16.0f) - smoothTMod) * 0.05f;
+      smoothCMod += ((avgC / 16.0f) - smoothCMod) * 0.05f;
 
-      smoothTMod += (avgT - smoothTMod) * 0.05f;
-      smoothCMod += (avgC - smoothCMod) * 0.05f;
-
-      // --- 3. Strict Deadzone ---
       const float CV_DEADZONE = 0.15f;
       bool cvT_active = (smoothTMod > CV_DEADZONE);
       bool cvC_active = (smoothCMod > CV_DEADZONE);
 
-      // --- 4. Large-Band Hysteresis for Engines ---
+      // Large-Band Hysteresis for Engines
       static float lockT = -1.0f;
       const float ENG_HYST = 0.10f;
-
       if (cvT_active) {
         if (fabsf(smoothTMod - lockT) > ENG_HYST) {
           float norm = (smoothTMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
-          int new_idx = (int)(norm * (float)NUM_ENGINES);
-          new_idx = constrain(new_idx, 0, NUM_ENGINES - 1);
-
+          int new_idx = constrain((int)(norm * NUM_ENGINES), 0, NUM_ENGINES - 1);
           if (new_idx != engine_idx) {
             engine_idx = new_idx;
             lockT = smoothTMod;
@@ -1097,14 +1338,12 @@ void loop1() {
         lockT = -1.0f;
       }
 
-      // --- 5. Large-Band Hysteresis for FM ---
+      // Large-Band Hysteresis for FM
       static float lockC = 0.0f;
       const float FM_HYST = 0.1f;
-
       if (cvC_active) {
         if (fabsf(smoothCMod - lockC) > FM_HYST) {
-          float target_fm = (smoothCMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
-          fm_mod = constrain(target_fm, 0.0f, 1.0f);
+          fm_mod = constrain((smoothCMod - CV_DEADZONE) / (1.0f - CV_DEADZONE), 0.0f, 1.0f);
           lockC = smoothCMod;
         }
       } else {
@@ -1114,42 +1353,58 @@ void loop1() {
           lockC = 0.0f;
         }
       }
-
       timbre_locked = false;
       color_locked = false;
-    }
-
-
-    else {
-      smoothT += (rT - smoothT) * 0.08f;
-      smoothC += (rC - smoothC) * 0.08f;
-      timbre_in = smoothT;
-      color_in = smoothC;
-
-      // Zero out all CV-related variables
+    } else {
+      // Default Behavior
+      timbre_in = pot_timbre;
+      color_in = pot_color;
       timb_mod_cv = 0.0f;
       color_mod_cv = 0.0f;
       fm_mod = 0.0f;
-
       timbre_locked = false;
       color_locked = false;
-      engine_updated = true;
+    }
+
+    // --- 3. VALUE STABILISATION ---
+    int nextT = (int)(timbre_in * 127.0f + 0.5f);
+    int nextC = (int)(color_in * 127.0f + 0.5f);
+    static int lastStableT = -1, lastStableC = -1;
+
+    // A. Always update the values for the sound engine (so sound stays live)
+    bool timbreChanged = (abs(nextT - lastStableT) > 1 || (nextT != lastStableT && (nextT == 0 || nextT == 127)));
+    bool colorChanged = (abs(nextC - lastStableC) > 1 || (nextC != lastStableC && (nextC == 0 || nextC == 127)));
+
+    if (timbreChanged) {
+      lastStableT = nextT;
+      displayTimbre = nextT;
+    }
+    if (colorChanged) {
+      lastStableC = nextC;
+      displayColor = nextC;
+    }
+
+    if (timbreChanged || colorChanged) {
+      if (!btnIsDown && !click_pending) {
+        engine_updated = true;
+      }
     }
   }
 
-  static int lClk = digitalRead(ENCODER_CLK);
+  // --- 4. ENCODER ROTATION ---
+  static int lClk = HIGH;
   int clk = digitalRead(ENCODER_CLK);
   static unsigned long last_enc_time = 0;
 
-  if (clk != lClk && millis() - last_enc_time > 8) {
+  if (lClk == HIGH && clk == LOW && (millis() - last_enc_time > 15)) {
     last_enc_time = millis();
-    int step = (digitalRead(ENCODER_DT) != clk) ? 1 : -1;
+    int step = (digitalRead(ENCODER_DT) == HIGH) ? 1 : -1;
+    last_encoder_activity = millis();
 
     switch (display_mode) {
       case ENGINE_SELECT_MODE:
         engine_idx = (engine_idx + step + NUM_ENGINES) % NUM_ENGINES;
         engine_updated = true;
-        last_encoder_activity = millis();
         break;
 
       case SETTINGS_MODE:
@@ -1163,101 +1418,173 @@ void loop1() {
             env_release_s = constrain(env_release_s + step * 0.01f, 0.01f, 2.f);
             env_params_changed = true;
             break;
+
+          case ARP_TOGGLE:
+            arp.enabled = !arp.enabled;
+            if (!arp.enabled) {
+              arp.clear();
+              for (int i = 0; i < MAX_VOICES; i++) {
+                voices[i].active = false;
+                voices[i].env = 0.0f;
+              }
+              arp.lastPitchCount = 0;
+            }
+            break;
+
+          case ARP_MODE:
+            {
+              int nextMode = (int)arp.mode + 1;
+              if (nextMode > 4) nextMode = 0;
+              arp.mode = (ArpDirection)nextMode;
+              break;
+            }
+
+          case ARP_DIV:
+            {
+              int currentIdx = 0;
+              for (int i = 0; i < NUM_DIVS; i++) {
+                if (arp.division == arpDivTable[i]) {
+                  currentIdx = i;
+                  break;
+                }
+              }
+              int nextIdx = constrain(currentIdx + step, 0, NUM_DIVS - 1);
+              arp.division = arpDivTable[nextIdx];
+              break;
+            }
+
+          case ARP_OCTAVE:
+            arp.octaves = constrain(arp.octaves + step, 1, 4);
+            arp.updateSort();
+            break;
+
+          case ARP_LATCH:
+            arp.latch_enabled = !arp.latch_enabled;
+            if (!arp.latch_enabled) {
+              arp.clear();
+              for (int i = 0; i < MAX_VOICES; i++) {
+                voices[i].active = false;
+                voices[i].sustained = false;
+              }
+              arp.lastPitchCount = 0;
+            }
+            break;
+
           case FILTER_TOGGLE:
             filter_enabled = !filter_enabled;
-            midi_mod = false;
-            cv_mod1 = false;
-            cv_mod2 = false;
-
+            midi_mod = cv_mod1 = cv_mod2 = false;
             break;
           case MIDI_MOD:
             midi_mod = !midi_mod;
-
-            if (midi_mod) {
-              cv_mod1 = false;
-              cv_mod2 = false;
-            }
+            if (midi_mod) cv_mod1 = cv_mod2 = false;
             break;
           case CV_MOD1:
             cv_mod1 = !cv_mod1;
-            filter_enabled = false;
-            cv_mod2 = false;
-            if (cv_mod1) midi_mod = false;
+            filter_enabled = cv_mod2 = midi_mod = false;
             break;
           case CV_MOD2:
             cv_mod2 = !cv_mod2;
-            cv_mod1 = false;
-            filter_enabled = false;
-            if (cv_mod2) midi_mod = false;
-            break;
-            if (cv_mod1) midi_mod = false;
+            cv_mod1 = filter_enabled = midi_mod = false;
             break;
           case MIDI_CH:
             midi_ch = constrain(midi_ch + step, 1, 16);
             break;
           case SCOPE_TOGGLE:
             oscilloscope_enabled = !oscilloscope_enabled;
-            if (!oscilloscope_enabled && display_mode == OSCILLOSCOPE_MODE) {
-              display_mode = ENGINE_SELECT_MODE;
-              scope_ready = false;
-            }
+            if (!oscilloscope_enabled && display_mode == OSCILLOSCOPE_MODE) display_mode = ENGINE_SELECT_MODE;
             break;
-
           default:
             display_mode = ENGINE_SELECT_MODE;
-            midi_mod = false;
-            cv_mod1 = false;
-            cv_mod2 = false;
-            filter_enabled = false;
-            engine_updated = true;
-
             break;
         }
-        last_encoder_activity = millis();
         engine_updated = true;
         break;
 
       case OSCILLOSCOPE_MODE:
         display_mode = ENGINE_SELECT_MODE;
         engine_updated = true;
-        last_encoder_activity = millis();
         break;
     }
   }
   lClk = clk;
 
-  static int lBtn = HIGH;
-  static unsigned long last_btn_time = 0;
-
+  // --- 5. BUTTON ---
   int btn = digitalRead(ENCODER_SW);
+  unsigned long now = millis();
 
-  if (lBtn == HIGH && btn == LOW && millis() - last_btn_time > BUTTON_DEBOUNCE_MS) {
+  if (btn == LOW && lBtn == HIGH && (now - last_btn_time > BUTTON_DEBOUNCE_MS)) {
+    btnDownTime = now;
+    btnIsDown = true;
+    longPressExecuted = false;
+    saveExecuted = false;
+    last_btn_time = now;
+  }
 
-    last_btn_time = millis();
-    last_encoder_activity = millis();
+  if (btn == LOW && btnIsDown) {
+    unsigned long holdDuration = now - btnDownTime;
 
-    switch (display_mode) {
-      case ENGINE_SELECT_MODE:
-        display_mode = SETTINGS_MODE;
-        enc_state = ENGINE_SELECT;
-        engine_updated = true;
-        break;
+    // 1000ms: LONG PRESS SAVE
+    if (holdDuration >= LONG_PRESS_MS && !saveExecuted) {
+      saveSettings();
+      saveExecuted = true;
+      longPressExecuted = true;
+    }
 
-      case SETTINGS_MODE:
-        enc_state = (EncoderState)((enc_state + 1) % 9);
-        engine_updated = true;
-        break;
+    else if (holdDuration >= BUTTON_DEBOUNCE_MS && (display_mode == ENGINE_SELECT_MODE || display_mode == OSCILLOSCOPE_MODE)) {
+      display_mode = SETTINGS_MODE;
+      enc_state = ENGINE_SELECT;
+      engine_updated = true;
+      last_draw_time = 0;
+      drawEngineUI();
+      display.display();
 
-      case OSCILLOSCOPE_MODE:
-        display_mode = SETTINGS_MODE;
-        enc_state = (EncoderState)((enc_state + 1) % 9);
-        engine_updated = true;
-        break;
+      last_encoder_activity = now;
     }
   }
 
+  if (btn == HIGH && lBtn == LOW) {
+    btnIsDown = false;
+    last_btn_time = now;
+
+    if (!longPressExecuted) {
+      if (!click_pending) {
+        click_pending = true;
+        last_click_time = now;
+      }
+    }
+    engine_updated = true;
+    last_draw_time = 0;
+  }
   lBtn = btn;
 
+  if (click_pending) {
+    unsigned long waitTime = now - last_click_time;
+
+    if (btn == LOW && waitTime > 100 && waitTime < 600) {
+      if (display_mode == SETTINGS_MODE) {
+        display_mode = ENGINE_SELECT_MODE;
+        enc_state = ENGINE_SELECT;
+        last_encoder_activity = now;
+        click_pending = false;
+        longPressExecuted = true;
+      }
+    } else if (waitTime > 300 && btn == HIGH) {
+      if (display_mode == SETTINGS_MODE) {
+        if (enc_state >= SCOPE_TOGGLE) {
+          enc_state = VOLUME_ADJUST;
+        } else {
+          enc_state = (EncoderState)(enc_state + 1);
+        }
+
+        last_encoder_activity = now;
+      }
+      click_pending = false;
+      engine_updated = true;
+      last_draw_time = 0;
+    }
+  }
+
+  // --- 6. SCREEN REFRESH ---
 #if USE_SCREEN
   static int last_engine_draw = -1;
   static unsigned long last_draw_time = 0;
@@ -1266,20 +1593,21 @@ void loop1() {
     last_draw_time = millis();
     unsigned long idle = millis() - last_encoder_activity;
 
-    if (display_mode == SETTINGS_MODE && idle > 5000) {
+#ifdef MENU_EXIT_TIMEOUT
+    if (display_mode == SETTINGS_MODE && idle > TIMEOUT_MS) {
       display_mode = ENGINE_SELECT_MODE;
       enc_state = ENGINE_SELECT;
       engine_updated = true;
-      last_engine_draw = -1;
-    } else if (display_mode == ENGINE_SELECT_MODE && idle > 10000 && oscilloscope_enabled) {
+    } else
+#endif
+
+      if (display_mode == ENGINE_SELECT_MODE && idle > 10000 && oscilloscope_enabled) {
       display_mode = OSCILLOSCOPE_MODE;
       engine_updated = true;
-      last_engine_draw = -1;
     }
+
     switch (display_mode) {
-      case OSCILLOSCOPE_MODE:
-        drawScope();
-        break;
+      case OSCILLOSCOPE_MODE: drawScope(); break;
       case ENGINE_SELECT_MODE:
       case SETTINGS_MODE:
         if (engine_updated || engine_idx != last_engine_draw) {
