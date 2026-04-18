@@ -23,12 +23,16 @@
 
   Compilation:
 
-  RP2040: - Optimize: Optimize Even More (-O3)
+  RP2040: - Flash size: 2MB (Sketch:1MB, FS:1MB)
+          - Optimize: Optimize Even More (-O3)
           - CPU Speed: 240mhz (Overclock)   
           - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
+          - USB stack: Adafruit TinyUSB 
   RP2350:
+         - Flash size: 4MB (Sketch:1MB, FS:3MB)
          - Optimize: Optimize Even More (-O3)
          - Sample rate: 48000
+          - USB stack: Adafruit TinyUSB 
   
   Software:
  - BRAIDS and STMLIB libraries ported by Mark Washeim:
