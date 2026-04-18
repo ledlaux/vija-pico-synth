@@ -80,6 +80,8 @@
 #define ENCODER_CLK 8
 #define BUTTON_DEBOUNCE_MS 150
 #define LONG_PRESS_MS 1000
+// #define MENU_EXIT_TIMEOUT
+#define TIMEOUT_MS 30000
 
 #define USE_UART_MIDI 0  // 0 = USB MIDI, 1 = UART MIDI
 #define MIDI_UART_RX 1
@@ -1233,6 +1235,7 @@ void loop1() {
   static float smoothRes = 0.25f;
   static unsigned long last_pot_read = 0;
 
+
   static unsigned long last_btn_time = 0;
   static unsigned long last_click_time = 0;
   static unsigned long btnDownTime = 0;
@@ -1241,6 +1244,7 @@ void loop1() {
   static bool saveExecuted = false;
   static bool click_pending = false;
   static int lBtn = HIGH;
+
 
   // --- 1. POTENTIOMETER & MODULATION PROCESSING ---
   if (millis() - last_pot_read > 10) {
@@ -1520,7 +1524,7 @@ void loop1() {
       longPressExecuted = true;
     }
 
-    else if (holdDuration >= BUTTON_DEBOUNCE_MS && display_mode == ENGINE_SELECT_MODE) {
+    else if (holdDuration >= BUTTON_DEBOUNCE_MS && (display_mode == ENGINE_SELECT_MODE || display_mode == OSCILLOSCOPE_MODE)) {
       display_mode = SETTINGS_MODE;
       enc_state = ENGINE_SELECT;
       engine_updated = true;
@@ -1554,12 +1558,19 @@ void loop1() {
       if (display_mode == SETTINGS_MODE) {
         display_mode = ENGINE_SELECT_MODE;
         enc_state = ENGINE_SELECT;
+        last_encoder_activity = now;
         click_pending = false;
         longPressExecuted = true;
       }
     } else if (waitTime > 300 && btn == HIGH) {
       if (display_mode == SETTINGS_MODE) {
-        enc_state = (EncoderState)((enc_state + 1) % 15);
+        if (enc_state >= SCOPE_TOGGLE) {
+          enc_state = VOLUME_ADJUST;
+        } else {
+          enc_state = (EncoderState)(enc_state + 1);
+        }
+
+        last_encoder_activity = now;
       }
       click_pending = false;
       engine_updated = true;
@@ -1576,11 +1587,15 @@ void loop1() {
     last_draw_time = millis();
     unsigned long idle = millis() - last_encoder_activity;
 
-    if (display_mode == SETTINGS_MODE && idle > 25000) {
+#ifdef MENU_EXIT_TIMEOUT
+    if (display_mode == SETTINGS_MODE && idle > TIMEOUT_MS) {
       display_mode = ENGINE_SELECT_MODE;
       enc_state = ENGINE_SELECT;
       engine_updated = true;
-    } else if (display_mode == ENGINE_SELECT_MODE && idle > 10000 && oscilloscope_enabled) {
+    } else
+#endif
+
+      if (display_mode == ENGINE_SELECT_MODE && idle > 10000 && oscilloscope_enabled) {
       display_mode = OSCILLOSCOPE_MODE;
       engine_updated = true;
     }
