@@ -121,8 +121,8 @@ enum EncoderState { ENGINE_SELECT,
                     RELEASE_ADJUST,
                     ARP_TOGGLE,
                     ARP_MODE,
-                    ARP_OCTAVE,
                     ARP_DIV,
+                    ARP_OCTAVE,
                     ARP_LATCH,
                     FILTER_TOGGLE,
                     MIDI_MOD,
@@ -138,7 +138,6 @@ enum ArpDirection { UP,
                     DOWN,
                     UP_DOWN,
                     RANDOM,
-                    CHORD,
                     AS_PLAYED };
 
 volatile uint8_t midi_ch = 1;
@@ -226,6 +225,14 @@ struct Voice {
   bool sustained;
 };
 
+struct ArpSettings {
+  bool enabled;
+  bool latch;
+  uint8_t mode;
+  uint8_t division;
+  uint8_t octaves;
+};
+
 struct SynthSettings {
   float master_volume;
   float env_attack_s;
@@ -242,6 +249,7 @@ struct SynthSettings {
   uint8_t midi_ch;
   EncoderState enc_state;
   bool oscilloscope_enabled;
+  ArpSettings arp_set;
 };
 
 // Default settings for the first run
@@ -260,7 +268,14 @@ SynthSettings settings = {
   .color_mod_cv = 0.0f,
   .midi_ch = 1,
   .enc_state = ENGINE_SELECT,
-  .oscilloscope_enabled = true
+  .oscilloscope_enabled = true,
+  .arp_set = {
+    .enabled = false,
+    .latch = false,
+    .mode = AS_PLAYED,
+    .division = 6,     // 1/16 default
+    .octaves = 2
+  }
 };
 
 Voice voices[MAX_VOICES];
@@ -316,14 +331,14 @@ struct Arpeggiator {
   bool directionUp = true;
   uint32_t tickCounter = 0;
 
-  void addNote(int pitch) {
+  void __not_in_flash_func(addNote)(int pitch) {
     if (numHeld < MAX_ARP_NOTES) {
       heldNotes[numHeld++] = pitch;
       updateSort();
     }
   }
 
-  void removeNote(int pitch) {
+ void __not_in_flash_func(removeNote)(int pitch) {
     for (int i = 0; i < numHeld; i++) {
       if (heldNotes[i] == pitch) {
         for (int j = i; j < numHeld - 1; j++) heldNotes[j] = heldNotes[j + 1];
@@ -335,7 +350,7 @@ struct Arpeggiator {
     if (numHeld == 0) currentStep = -1;
   }
 
-  void updateSort() {
+ void __not_in_flash_func(updateSort)() {
     int count = 0;
     // Fill the buffer with base notes + octave offsets
     for (int oct = 0; oct < octaves; oct++) {
@@ -357,7 +372,7 @@ struct Arpeggiator {
     }
   }
 
-  void clear() {
+  void __not_in_flash_func(clear)() {
     numHeld = 0;
     currentStep = -1;
     lastPitchCount = 0;
@@ -366,7 +381,7 @@ struct Arpeggiator {
 
 Arpeggiator arp;
 
-int findFreeVoice() {
+int __not_in_flash_func(findFreeVoice)() {
   int oldest = 0;
   uint32_t old_age = voices[0].age;
 
@@ -386,7 +401,7 @@ int findFreeVoice() {
 }
 
 
-int findVoiceByPitch(int pitch) {
+int __not_in_flash_func(findVoiceByPitch)(int pitch) {
   for (int i = 0; i < MAX_VOICES; i++)
     if (voices[i].active && voices[i].pitch == pitch) return i;
   return -1;
@@ -596,41 +611,33 @@ void drawEngineUI() {
 
     case ARP_MODE:
       {
-        const char *modes[] = { "UP", "DOWN", "UPDN", "RAND", "CHRD", "PLAY" };
+        const char *modes[] = { "UP", "DOWN", "UPDN", "PLAY", "RAND" };
         sprintf(menuBuf, "MODE:%s", modes[arp.mode]);
         break;
       }
 
+     case ARP_DIV:
+    {
+      const char *divStr;
+      if      (arp.division == 96) divStr = "1/1";
+      else if (arp.division == 48) divStr = "1/2";
+      else if (arp.division == 24) divStr = "1/4";
+      else if (arp.division == 18) divStr = "1/8.";  // 8th Dotted
+      else if (arp.division == 12) divStr = "1/8";
+      else if (arp.division == 9)  divStr = "1/16."; // 16th Dotted
+      else if (arp.division == 8)  divStr = "1/8T";  // 8th Triplet
+      else if (arp.division == 6)  divStr = "1/16";
+      else if (arp.division == 4)  divStr = "1/16T"; // 16th Triplet
+      else if (arp.division == 3)  divStr = "1/32";
+      else divStr = "??";
+      
+      sprintf(menuBuf, "DIV:%s", divStr);
+      break;
+    }
+
     case ARP_OCTAVE:
       sprintf(menuBuf, "OCT:%d", arp.octaves);
       break;
-
-    // case ARP_DIV:
-    //   {
-    //     const char *divStr;
-    //     if (arp.division == 24) divStr = "1/4";
-    //     else if (arp.division == 12) divStr = "1/8";
-    //     else if (arp.division == 6) divStr = "1/16";
-    //     else if (arp.division == 3) divStr = "1/32";
-    //     else divStr = "??";
-    //     sprintf(menuBuf, "DIV:%s", divStr);
-    //     break;
-    //   }
-
-    case ARP_DIV:
-  {
-    const char *divStr;
-    if      (arp.division == 96) divStr = "1/1";
-    else if (arp.division == 48) divStr = "1/2";
-    else if (arp.division == 24) divStr = "1/4";
-    else if (arp.division == 12) divStr = "1/8";
-    else if (arp.division == 6)  divStr = "1/16";
-    else if (arp.division == 3)  divStr = "1/32";
-    else divStr = "??";
-    
-    sprintf(menuBuf, "DIV:%s", divStr);
-    break;
-  }
 
     case ARP_LATCH:
       sprintf(menuBuf, "LATCH:%s", arp.latch_enabled ? "ON" : "OFF");
@@ -731,21 +738,6 @@ void __not_in_flash_func(advanceArp)() {
   arp.lastPitchCount = 0;
 
   if (arp.numHeld == 0) return;
-
-  // // 2. CHORD MODE WITH OCTAVES
-  // if (arp.mode == CHORD) {
-  //   int notesTriggered = 0;
-  //   // Force nested loops to ensure base notes AND octaves play
-  //   for (int oct = 0; oct < arp.octaves; oct++) {
-  //     for (int i = 0; i < arp.numHeld; i++) {
-  //       if (notesTriggered >= MAX_VOICES) break;
-
-  //       int pitch = arp.heldNotes[i] + (oct * 12);
-  //       triggerArpVoice(pitch);
-  //       notesTriggered++;
-  //     }
-  //   }
-  // }
 
   // 3. SEQUENTIAL MODES
   else {
@@ -928,7 +920,6 @@ void __not_in_flash_func(handleMIDI)() {
     }
   } else if (msgType == 0x90) {  // Note On
     if (arp.enabled) {
-      // NEW CHORD REPLACEMENT LOGIC
       if (arp.latch_enabled && arp.physicalKeys == 0) {
         arp.clear();
         for (int i = 0; i < MAX_VOICES; i++) voices[i].active = false;
@@ -984,6 +975,11 @@ void saveSettings() {
   doc["ch"] = settings.midi_ch;
   doc["enc"] = (int)settings.enc_state;
   doc["osc"] = settings.oscilloscope_enabled;
+  doc["arp_on"]  = settings.arp_set.enabled;
+  doc["arp_lat"] = settings.arp_set.latch;
+  doc["arp_mode"] = (uint8_t)settings.arp_set.mode;
+  doc["arp_div"] = settings.arp_set.division;
+  doc["arp_oct"] = settings.arp_set.octaves;
 
   File f = LittleFS.open(SETTINGS_FILE, "w");
   if (!f) return;
@@ -1023,6 +1019,11 @@ void loadSettings() {
   settings.midi_ch = doc["ch"] | 1;
   settings.enc_state = (EncoderState)(doc["enc"] | 0);
   settings.oscilloscope_enabled = doc["osc"] | true;
+  settings.arp_set.enabled  = doc["arp_on"]  | false;
+  settings.arp_set.latch    = doc["arp_lat"] | false;
+  settings.arp_set.mode     = (ArpDirection)(doc["arp_mode"] | AS_PLAYED);
+  settings.arp_set.division = doc["arp_div"] | 6;
+  settings.arp_set.octaves  = doc["arp_oct"] | 1;
 
   master_volume = settings.master_volume;
   env_attack_s = settings.env_attack_s;
@@ -1039,6 +1040,14 @@ void loadSettings() {
   midi_ch = settings.midi_ch;
   enc_state = settings.enc_state;
   oscilloscope_enabled = settings.oscilloscope_enabled;
+
+  arp.enabled = settings.arp_set.enabled;
+  arp.latch_enabled = settings.arp_set.latch;
+  arp.mode = (ArpDirection)settings.arp_set.mode;
+  arp.division = settings.arp_set.division;
+  arp.octaves = settings.arp_set.octaves;
+  arp.tickCounter = 0;
+  arp.currentStep = -1;
 
   lastSavedSettings = settings;
   engine_updated = true;
@@ -1098,6 +1107,12 @@ void saveButton() {
       settings.color_mod_cv = color_mod_cv;
       settings.midi_ch = midi_ch;
       settings.oscilloscope_enabled = oscilloscope_enabled;
+
+      settings.arp_set.enabled = arp.enabled;
+      settings.arp_set.latch = arp.latch_enabled;
+      settings.arp_set.mode = (uint8_t)arp.mode;
+      settings.arp_set.division = arp.division;
+      settings.arp_set.octaves = arp.octaves;
 
       saveSettings();  // This now ONLY clicks if data changed
       has_saved_this_press = true;
@@ -1382,8 +1397,23 @@ void loop1() {
           case ARP_MODE:
             {
               int nextMode = (int)arp.mode + 1;
-              if (nextMode > 5) nextMode = 0;
+              if (nextMode > 4) nextMode = 0;
               arp.mode = (ArpDirection)nextMode;
+              break;
+            }
+
+            case ARP_DIV:
+            {
+              if      (arp.division == 96) arp.division = 48; // Whole 1/1
+              else if (arp.division == 48) arp.division = 24; // Half 1/2
+              else if (arp.division == 24) arp.division = 18; // Quarter 1/4
+              else if (arp.division == 18) arp.division = 12; // 8th Dotted 1/8.
+              else if (arp.division == 12) arp.division = 9;  // 8th 1/8
+              else if (arp.division == 9)  arp.division = 8;  // 16th Dotted 1/16.
+              else if (arp.division == 8)  arp.division = 6;  // 8th Triplet 1/8T
+              else if (arp.division == 6)  arp.division = 4;  // 16th 1/16
+              else if (arp.division == 4)  arp.division = 3;  // 16th Triplet 1/16T
+              else                         arp.division = 96; // 32nd 1/32
               break;
             }
 
@@ -1394,28 +1424,6 @@ void loop1() {
               engine_updated = true;
             }
             break;
-
-          // case ARP_DIV:
-          //   {
-          //     // Toggle through 24 (1/4), 12 (1/8), 6 (1/16), 3 (1/32)
-          //     if (arp.division == 24) arp.division = 12;
-          //     else if (arp.division == 12) arp.division = 6;
-          //     else if (arp.division == 6) arp.division = 3;
-          //     else arp.division = 24;
-          //     break;
-          //   }
-
-          case ARP_DIV:
-            {
-              // Cycle: 1 -> 1/2 -> 1/4 -> 1/8 -> 1/16 -> 1/32
-              if (arp.division == 96)      arp.division = 48; // 1 to 1/2
-              else if (arp.division == 48) arp.division = 24; // 1/2 to 1/4
-              else if (arp.division == 24) arp.division = 12; // 1/4 to 1/8
-              else if (arp.division == 12) arp.division = 6;  // 1/8 to 1/16
-              else if (arp.division == 6)  arp.division = 3;  // 1/16 to 1/32
-              else arp.division = 96;                         // Reset to 1
-              break;
-            }
 
           case ARP_LATCH:
             if (step != 0) {
