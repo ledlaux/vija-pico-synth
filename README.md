@@ -13,24 +13,37 @@ in semi-modular format.
 * **Modulation:** 2 pots, CV input and midi cc.
 * **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance.
 * **Dual MIDI:** Support for both USB MIDI and classic UART MIDI.
+* **Arpeggiator** with midi sync.
 
 ---
 
 ## 🕹 Menu System & UI
-The synthesizer operates in three primary display modes:
-1.  **ENGINE SELECT:** Rotate the encoder to scroll through engines  
-2.  **SETTINGS:** Click the encoder button to cycle through parameters
-    * **VOLUME:** Global gain control
-    * **A/R ENVELOPES:** Adjust the "snappiness" (Attack) or "fade" (Release) of notes
-    * **FILTER:** Enable/Disable the Filter
-    * **CV:** CV modulation mode
-    * **MIDI:** Enable MIDI CC and disable CV
-    * **MIDI CH:** Set the input channel (1-16)
-    * **OSCILOSCOPE Toggle:** On / Off
-    * **SAVE SETTINGS:** Long press button to save menu settings
-    * **EXIT MENU**  
-4.  **OSCILOSCOPE:** Automatically engages after 10 seconds to visualize the current waveform
 
+The synthesizer operates in three primary display modes:
+
+1. **ENGINE SELECT:** Rotate the encoder to scroll through engines  
+
+2. **SETTINGS:** Click the encoder button to cycle through parameters  
+   * **VOLUME:** Global gain control  
+   * **A/R ENVELOPES:** Adjust the "snappiness" (Attack) or "fade" (Release) of notes  
+   * **FILTER:** Enable/Disable the Filter  
+
+   * **ARPEGGIATOR:**  
+     - **ARP:** Enable/Disable arpeggiator  
+     - **MODE:** UP / DOWN / UPDN / PLAY / RAND  
+     - **DIV:** Note division (e.g. 1/4, 1/8, triplet, dotted)  
+     - **OCT:** Octave range  
+     - **LATCH:** Hold notes after release  
+
+   * **CV:** CV modulation mode  
+   * **MIDI:** Enable MIDI CC and disable CV  
+   * **MIDI CH:** Set the input channel (1–16)  
+
+   * **OSCILLOSCOPE:** Toggle On / Off  
+   * **SAVE SETTINGS:** Long press button to save menu settings  
+   * **EXIT MENU**  
+
+3. **OSCILLOSCOPE:** Automatically engages after 10 seconds to visualize the current waveform  
 ### Filter Mode (Default)
 
 - Timbre & Color (default)  
@@ -78,11 +91,6 @@ VIJA responds to the following Control Change (CC) messages on the selected MIDI
 | **64** | Sustain (Hold notes) |
 | **71** | Filter Resonance |
 | **74** | Filter Cutoff |
-
----
-
-### Arpeggiator
-
 
 ---
 
