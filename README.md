@@ -8,7 +8,7 @@ in semi-modular format.
 ## 🚀 Features
 
 * **40+ Oscillator Engines:** Includes VA, FM, Additive, Wavetable, Physical Modeling and Drums.
-* **4-Voice Polyphony:** Per-sample AR (Attack-Release) envelopes.
+* **Polyphony:** Per-sample AR (Attack-Release) envelopes.
 * **OLED Interface:** Real-time feedback with a menu system and a oscilloscope.
 * **Modulation:** 2 pots, CV input and midi cc.
 * **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance.
