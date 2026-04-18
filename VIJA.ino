@@ -12,7 +12,7 @@
   - USB or UART MIDI input
   - Filter (SVF)
   - OLED display with menu system & oscilloscope
-  - Synth controls via potentiometers or MIDI CC
+  - Synth controls via potentiometers, CV or MIDI CC
   - Arpeggiator (midi sync)
   
   Hardware:
