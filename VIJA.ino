@@ -23,16 +23,17 @@
 
   Compilation:
 
-  RP2040: - Flash size: 2MB (Sketch:1MB, FS:1MB)
-          - Optimize: Optimize Even More (-O3)
-          - CPU Speed: 240mhz (Overclock)   
-          - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
-          - USB stack: Adafruit TinyUSB 
+    RP2040: 
+            - Flash size: 2MB (Sketch:1MB, FS:1MB)
+            - Optimize: Optimize Even More (-O3)
+            - CPU Speed: 240mhz (Overclock)   
+            - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
+            - USB stack: Adafruit TinyUSB 
   RP2350:
-         - Flash size: 4MB (Sketch:1MB, FS:3MB)
-         - Optimize: Optimize Even More (-O3)
-         - Sample rate: 48000
-         - USB stack: Adafruit TinyUSB 
+            - Flash size: 4MB (Sketch:1MB, FS:3MB)
+            - Optimize: Optimize Even More (-O3)
+            - Sample rate: 48000
+            - USB stack: Adafruit TinyUSB 
   
   Software:
  - BRAIDS and STMLIB libraries ported by Mark Washeim:
@@ -170,7 +171,7 @@ volatile bool env_params_changed = true;
 volatile unsigned long last_param_change = 0;
 unsigned long last_midi_lock_time = 0;
 
-volatile bool midi_mod = false;
+volatile bool midi_mod = true;
 volatile bool cv_mod1 = false;
 volatile bool cv_mod2 = false;
 
@@ -179,7 +180,7 @@ volatile float color_midi_target = 0.0f;
 volatile bool timbre_locked = false;
 volatile bool color_locked = false;
 
-volatile bool filter_enabled = true;
+volatile bool filter_enabled = false;
 volatile float filter_mix = 1.0f;
 volatile uint8_t filter_cutoff_cc = 64;
 volatile uint8_t filter_resonance_cc = 32;
@@ -197,7 +198,6 @@ const unsigned long AUTO_REVERT_MS = 4000;
 volatile unsigned long last_encoder_activity = 0;
 volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
 volatile EncoderState enc_state = ENGINE_SELECT;
-
 
 volatile int displayTimbre = 0;
 volatile int displayColor = 0;
@@ -264,8 +264,8 @@ SynthSettings settings = {
   .env_attack_s = 0.009f,
   .env_release_s = 0.01f,
   .engine_idx = 1,
-  .filter_enabled = true,
-  .midi_mod = false,
+  .filter_enabled = false,
+  .midi_mod = true,
   .cv_mod1 = false,
   .cv_mod2 = false,
   .timbre_in = 0.4f,
