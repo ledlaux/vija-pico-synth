@@ -1,7 +1,7 @@
 /*
   VIJA (v1.0.3) 
 
-  Copyright (c) 2025 Vadims Maksimovs ledlaux.github.com | GPLv3
+  Copyright (c) 2026 Vadims Maksimovs ledlaux.github.com | GPLv3
   
   Raspberry PICO polyphonic synthesizer based on Mutable Instruments Braids macro oscillator 
   in semi-modular format.
