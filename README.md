@@ -12,8 +12,8 @@ in semi-modular format.
 * **OLED Interface:** Real-time feedback with a menu system and a oscilloscope.
 * **Modulation:** 2 pots, CV input and MIDI CC.
 * **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance.
-* **Dual MIDI:** Support for both USB MIDI and classic UART MIDI.
-* **Arpeggiator** with midi sync.
+* **MIDI:** Support for both USB MIDI and classic UART MIDI.
+* **Arpeggiator** with MIDI sync.
 
 ---
 
