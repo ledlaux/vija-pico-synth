@@ -1392,6 +1392,15 @@ void loop1() {
 
           case ARP_TOGGLE:
             arp.enabled = !arp.enabled;
+            
+            if (!arp.enabled) {
+              arp.clear(); 
+              for (int i = 0; i < MAX_VOICES; i++) {
+                voices[i].active = false;
+                voices[i].env = 0.0f; 
+              }
+              arp.lastPitchCount = 0;
+            }
             break;
 
           case ARP_MODE:
