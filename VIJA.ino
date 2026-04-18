@@ -78,7 +78,7 @@
 #define ENCODER_SW 6
 #define ENCODER_DT 7
 #define ENCODER_CLK 8
-#define BUTTON_DEBOUNCE_MS 200
+#define BUTTON_DEBOUNCE_MS 150
 #define LONG_PRESS_MS 1000
 
 #define USE_UART_MIDI 0  // 0 = USB MIDI, 1 = UART MIDI
@@ -273,9 +273,8 @@ SynthSettings settings = {
     .enabled = false,
     .latch = false,
     .mode = AS_PLAYED,
-    .division = 6,     // 1/16 default
-    .octaves = 2
-  }
+    .division = 6,  // 1/16 default
+    .octaves = 2 }
 };
 
 Voice voices[MAX_VOICES];
@@ -313,6 +312,9 @@ const char *const engine_names[] = {
 
 constexpr int NUM_ENGINES = sizeof(engine_names) / sizeof(engine_names[0]);
 
+const uint8_t arpDivTable[] = { 96, 48, 24, 18, 12, 9, 8, 6, 4, 3 };
+const int NUM_DIVS = 10;
+
 struct Arpeggiator {
   volatile bool enabled = false;
   volatile bool latch_enabled = false;
@@ -338,7 +340,7 @@ struct Arpeggiator {
     }
   }
 
- void __not_in_flash_func(removeNote)(int pitch) {
+  void __not_in_flash_func(removeNote)(int pitch) {
     for (int i = 0; i < numHeld; i++) {
       if (heldNotes[i] == pitch) {
         for (int j = i; j < numHeld - 1; j++) heldNotes[j] = heldNotes[j + 1];
@@ -350,7 +352,7 @@ struct Arpeggiator {
     if (numHeld == 0) currentStep = -1;
   }
 
- void __not_in_flash_func(updateSort)() {
+  void __not_in_flash_func(updateSort)() {
     int count = 0;
     // Fill the buffer with base notes + octave offsets
     for (int oct = 0; oct < octaves; oct++) {
@@ -616,24 +618,25 @@ void drawEngineUI() {
         break;
       }
 
-     case ARP_DIV:
-    {
-      const char *divStr;
-      if      (arp.division == 96) divStr = "1/1";
-      else if (arp.division == 48) divStr = "1/2";
-      else if (arp.division == 24) divStr = "1/4";
-      else if (arp.division == 18) divStr = "1/8.";  // 8th Dotted
-      else if (arp.division == 12) divStr = "1/8";
-      else if (arp.division == 9)  divStr = "1/16."; // 16th Dotted
-      else if (arp.division == 8)  divStr = "1/8T";  // 8th Triplet
-      else if (arp.division == 6)  divStr = "1/16";
-      else if (arp.division == 4)  divStr = "1/16T"; // 16th Triplet
-      else if (arp.division == 3)  divStr = "1/32";
-      else divStr = "??";
-      
-      sprintf(menuBuf, "DIV:%s", divStr);
-      break;
-    }
+    case ARP_DIV:
+      {
+        const char *divStr;
+        switch (arp.division) {
+          case 96: divStr = "1/1"; break;
+          case 48: divStr = "1/2"; break;
+          case 24: divStr = "1/4"; break;
+          case 18: divStr = "1/8."; break;
+          case 12: divStr = "1/8"; break;
+          case 9: divStr = "1/16."; break;
+          case 8: divStr = "1/8T"; break;
+          case 6: divStr = "1/16"; break;
+          case 4: divStr = "1/16T"; break;
+          case 3: divStr = "1/32"; break;
+          default: divStr = "1/2"; break;
+        }
+        sprintf(menuBuf, "DIV:%s", divStr);
+        break;
+      }
 
     case ARP_OCTAVE:
       sprintf(menuBuf, "OCT:%d", arp.octaves);
@@ -975,7 +978,7 @@ void saveSettings() {
   doc["ch"] = settings.midi_ch;
   doc["enc"] = (int)settings.enc_state;
   doc["osc"] = settings.oscilloscope_enabled;
-  doc["arp_on"]  = settings.arp_set.enabled;
+  doc["arp_on"] = settings.arp_set.enabled;
   doc["arp_lat"] = settings.arp_set.latch;
   doc["arp_mode"] = (uint8_t)settings.arp_set.mode;
   doc["arp_div"] = settings.arp_set.division;
@@ -1019,11 +1022,11 @@ void loadSettings() {
   settings.midi_ch = doc["ch"] | 1;
   settings.enc_state = (EncoderState)(doc["enc"] | 0);
   settings.oscilloscope_enabled = doc["osc"] | true;
-  settings.arp_set.enabled  = doc["arp_on"]  | false;
-  settings.arp_set.latch    = doc["arp_lat"] | false;
-  settings.arp_set.mode     = (ArpDirection)(doc["arp_mode"] | AS_PLAYED);
+  settings.arp_set.enabled = doc["arp_on"] | false;
+  settings.arp_set.latch = doc["arp_lat"] | false;
+  settings.arp_set.mode = (ArpDirection)(doc["arp_mode"] | AS_PLAYED);
   settings.arp_set.division = doc["arp_div"] | 6;
-  settings.arp_set.octaves  = doc["arp_oct"] | 1;
+  settings.arp_set.octaves = doc["arp_oct"] | 1;
 
   master_volume = settings.master_volume;
   env_attack_s = settings.env_attack_s;
@@ -1230,6 +1233,15 @@ void loop1() {
   static float smoothRes = 0.25f;
   static unsigned long last_pot_read = 0;
 
+  static unsigned long last_btn_time = 0;
+  static unsigned long last_click_time = 0;
+  static unsigned long btnDownTime = 0;
+  static bool btnIsDown = false;
+  static bool longPressExecuted = false;
+  static bool saveExecuted = false;
+  static bool click_pending = false;
+  static int lBtn = HIGH;
+
   // --- 1. POTENTIOMETER & MODULATION PROCESSING ---
   if (millis() - last_pot_read > 10) {
     last_pot_read = millis();
@@ -1349,33 +1361,40 @@ void loop1() {
     int nextC = (int)(color_in * 127.0f + 0.5f);
     static int lastStableT = -1, lastStableC = -1;
 
-    if (abs(nextT - lastStableT) > 1 || (nextT != lastStableT && (nextT == 0 || nextT == 127))) {
+    // A. Always update the values for the sound engine (so sound stays live)
+    bool timbreChanged = (abs(nextT - lastStableT) > 1 || (nextT != lastStableT && (nextT == 0 || nextT == 127)));
+    bool colorChanged = (abs(nextC - lastStableC) > 1 || (nextC != lastStableC && (nextC == 0 || nextC == 127)));
+
+    if (timbreChanged) {
       lastStableT = nextT;
       displayTimbre = nextT;
-      engine_updated = true;
     }
-    if (abs(nextC - lastStableC) > 1 || (nextC != lastStableC && (nextC == 0 || nextC == 127))) {
+    if (colorChanged) {
       lastStableC = nextC;
       displayColor = nextC;
-      engine_updated = true;
+    }
+
+    if (timbreChanged || colorChanged) {
+      if (!btnIsDown && !click_pending) {
+        engine_updated = true;
+      }
     }
   }
 
-  // --- 4. ENCODER ---
-  static int lClk = HIGH; 
+  // --- 4. ENCODER ROTATION ---
+  static int lClk = HIGH;
   int clk = digitalRead(ENCODER_CLK);
   static unsigned long last_enc_time = 0;
 
   if (lClk == HIGH && clk == LOW && (millis() - last_enc_time > 15)) {
     last_enc_time = millis();
-    int step = (digitalRead(ENCODER_DT) == HIGH) ? 1 : -1; 
+    int step = (digitalRead(ENCODER_DT) == HIGH) ? 1 : -1;
     last_encoder_activity = millis();
 
     switch (display_mode) {
       case ENGINE_SELECT_MODE:
         engine_idx = (engine_idx + step + NUM_ENGINES) % NUM_ENGINES;
         engine_updated = true;
-        last_encoder_activity = millis();
         break;
 
       case SETTINGS_MODE:
@@ -1392,12 +1411,11 @@ void loop1() {
 
           case ARP_TOGGLE:
             arp.enabled = !arp.enabled;
-            
             if (!arp.enabled) {
-              arp.clear(); 
+              arp.clear();
               for (int i = 0; i < MAX_VOICES; i++) {
                 voices[i].active = false;
-                voices[i].env = 0.0f; 
+                voices[i].env = 0.0f;
               }
               arp.lastPitchCount = 0;
             }
@@ -1411,142 +1429,145 @@ void loop1() {
               break;
             }
 
-            case ARP_DIV:
+          case ARP_DIV:
             {
-              if      (arp.division == 96) arp.division = 48; // Whole 1/1
-              else if (arp.division == 48) arp.division = 24; // Half 1/2
-              else if (arp.division == 24) arp.division = 18; // Quarter 1/4
-              else if (arp.division == 18) arp.division = 12; // 8th Dotted 1/8.
-              else if (arp.division == 12) arp.division = 9;  // 8th 1/8
-              else if (arp.division == 9)  arp.division = 8;  // 16th Dotted 1/16.
-              else if (arp.division == 8)  arp.division = 6;  // 8th Triplet 1/8T
-              else if (arp.division == 6)  arp.division = 4;  // 16th 1/16
-              else if (arp.division == 4)  arp.division = 3;  // 16th Triplet 1/16T
-              else                         arp.division = 96; // 32nd 1/32
+              int currentIdx = 0;
+              for (int i = 0; i < NUM_DIVS; i++) {
+                if (arp.division == arpDivTable[i]) {
+                  currentIdx = i;
+                  break;
+                }
+              }
+              int nextIdx = constrain(currentIdx + step, 0, NUM_DIVS - 1);
+              arp.division = arpDivTable[nextIdx];
               break;
             }
 
           case ARP_OCTAVE:
-            if (step != 0) {
-              arp.octaves = constrain(arp.octaves + step, 1, 4);
-              arp.updateSort();  // Re-calculate the notes with new octaves
-              engine_updated = true;
-            }
+            arp.octaves = constrain(arp.octaves + step, 1, 4);
+            arp.updateSort();
             break;
 
           case ARP_LATCH:
-            if (step != 0) {
-              arp.latch_enabled = !arp.latch_enabled;
-
-              if (!arp.latch_enabled) {
-                arp.clear();
-
-                for (int i = 0; i < MAX_VOICES; i++) {
-                  voices[i].active = false;
-                  voices[i].sustained = false;
-                }
-
-                arp.lastPitchCount = 0;
+            arp.latch_enabled = !arp.latch_enabled;
+            if (!arp.latch_enabled) {
+              arp.clear();
+              for (int i = 0; i < MAX_VOICES; i++) {
+                voices[i].active = false;
+                voices[i].sustained = false;
               }
-              engine_updated = true;
+              arp.lastPitchCount = 0;
             }
             break;
-
 
           case FILTER_TOGGLE:
             filter_enabled = !filter_enabled;
-            midi_mod = false;
-            cv_mod1 = false;
-            cv_mod2 = false;
+            midi_mod = cv_mod1 = cv_mod2 = false;
             break;
           case MIDI_MOD:
             midi_mod = !midi_mod;
-
-            if (midi_mod) {
-              cv_mod1 = false;
-              cv_mod2 = false;
-            }
+            if (midi_mod) cv_mod1 = cv_mod2 = false;
             break;
           case CV_MOD1:
             cv_mod1 = !cv_mod1;
-            filter_enabled = false;
-            cv_mod2 = false;
-            if (cv_mod1) midi_mod = false;
+            filter_enabled = cv_mod2 = midi_mod = false;
             break;
           case CV_MOD2:
             cv_mod2 = !cv_mod2;
-            cv_mod1 = false;
-            filter_enabled = false;
-            if (cv_mod2) midi_mod = false;
-            break;
-            if (cv_mod1) midi_mod = false;
+            cv_mod1 = filter_enabled = midi_mod = false;
             break;
           case MIDI_CH:
             midi_ch = constrain(midi_ch + step, 1, 16);
             break;
           case SCOPE_TOGGLE:
             oscilloscope_enabled = !oscilloscope_enabled;
-            if (!oscilloscope_enabled && display_mode == OSCILLOSCOPE_MODE) {
-              display_mode = ENGINE_SELECT_MODE;
-              scope_ready = false;
-            }
+            if (!oscilloscope_enabled && display_mode == OSCILLOSCOPE_MODE) display_mode = ENGINE_SELECT_MODE;
             break;
-
           default:
             display_mode = ENGINE_SELECT_MODE;
-            midi_mod = false;
-            cv_mod1 = false;
-            cv_mod2 = false;
-            filter_enabled = false;
-            engine_updated = true;
-
             break;
         }
-        last_encoder_activity = millis();
         engine_updated = true;
         break;
 
       case OSCILLOSCOPE_MODE:
         display_mode = ENGINE_SELECT_MODE;
         engine_updated = true;
-        last_encoder_activity = millis();
         break;
     }
   }
   lClk = clk;
 
-  static int lBtn = HIGH;
-  static unsigned long last_btn_time = 0;
-
+  // --- 5. BUTTON ---
   int btn = digitalRead(ENCODER_SW);
+  unsigned long now = millis();
 
-  if (lBtn == HIGH && btn == LOW && millis() - last_btn_time > BUTTON_DEBOUNCE_MS) {
+  if (btn == LOW && lBtn == HIGH && (now - last_btn_time > BUTTON_DEBOUNCE_MS)) {
+    btnDownTime = now;
+    btnIsDown = true;
+    longPressExecuted = false;
+    saveExecuted = false;
+    last_btn_time = now;
+  }
 
-    last_btn_time = millis();
-    last_encoder_activity = millis();
+  if (btn == LOW && btnIsDown) {
+    unsigned long holdDuration = now - btnDownTime;
 
-    switch (display_mode) {
-      case ENGINE_SELECT_MODE:
-        display_mode = SETTINGS_MODE;
-        enc_state = ENGINE_SELECT;
-        engine_updated = true;
-        break;
+    // 1000ms: LONG PRESS SAVE
+    if (holdDuration >= LONG_PRESS_MS && !saveExecuted) {
+      saveSettings();
+      saveExecuted = true;
+      longPressExecuted = true;
+    }
 
-      case SETTINGS_MODE:
-        enc_state = (EncoderState)((enc_state + 1) % 15);
-        engine_updated = true;
-        break;
+    else if (holdDuration >= BUTTON_DEBOUNCE_MS && display_mode == ENGINE_SELECT_MODE) {
+      display_mode = SETTINGS_MODE;
+      enc_state = ENGINE_SELECT;
+      engine_updated = true;
+      last_draw_time = 0;
+      drawEngineUI();
+      display.display();
 
-      case OSCILLOSCOPE_MODE:
-        display_mode = SETTINGS_MODE;
-        enc_state = (EncoderState)((enc_state + 1) % 15);
-        engine_updated = true;
-        break;
+      last_encoder_activity = now;
     }
   }
 
+  if (btn == HIGH && lBtn == LOW) {
+    btnIsDown = false;
+    last_btn_time = now;
+
+    if (!longPressExecuted) {
+      if (!click_pending) {
+        click_pending = true;
+        last_click_time = now;
+      }
+    }
+    engine_updated = true;
+    last_draw_time = 0;
+  }
   lBtn = btn;
 
+  if (click_pending) {
+    unsigned long waitTime = now - last_click_time;
+
+    if (btn == LOW && waitTime > 100 && waitTime < 600) {
+      if (display_mode == SETTINGS_MODE) {
+        display_mode = ENGINE_SELECT_MODE;
+        enc_state = ENGINE_SELECT;
+        click_pending = false;
+        longPressExecuted = true;
+      }
+    } else if (waitTime > 300 && btn == HIGH) {
+      if (display_mode == SETTINGS_MODE) {
+        enc_state = (EncoderState)((enc_state + 1) % 15);
+      }
+      click_pending = false;
+      engine_updated = true;
+      last_draw_time = 0;
+    }
+  }
+
+  // --- 6. SCREEN REFRESH ---
 #if USE_SCREEN
   static int last_engine_draw = -1;
   static unsigned long last_draw_time = 0;
@@ -1555,20 +1576,17 @@ void loop1() {
     last_draw_time = millis();
     unsigned long idle = millis() - last_encoder_activity;
 
-    if (display_mode == SETTINGS_MODE && idle > 5000) {
+    if (display_mode == SETTINGS_MODE && idle > 25000) {
       display_mode = ENGINE_SELECT_MODE;
       enc_state = ENGINE_SELECT;
       engine_updated = true;
-      last_engine_draw = -1;
     } else if (display_mode == ENGINE_SELECT_MODE && idle > 10000 && oscilloscope_enabled) {
       display_mode = OSCILLOSCOPE_MODE;
       engine_updated = true;
-      last_engine_draw = -1;
     }
+
     switch (display_mode) {
-      case OSCILLOSCOPE_MODE:
-        drawScope();
-        break;
+      case OSCILLOSCOPE_MODE: drawScope(); break;
       case ENGINE_SELECT_MODE:
       case SETTINGS_MODE:
         if (engine_updated || engine_idx != last_engine_draw) {
