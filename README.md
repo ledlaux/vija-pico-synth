@@ -41,7 +41,7 @@ The synthesizer operates in three primary display modes:
 
    * **OSCILLOSCOPE:** Toggle On / Off  
    * **SAVE SETTINGS:** Long press button to save menu settings  
-   * **EXIT MENU**  Double button click 
+   * **EXIT MENU:**  Double button click 
 
 3. **OSCILLOSCOPE:** Automatically engages after 10 seconds to visualize the current waveform  
 ### Filter Mode (Default)
