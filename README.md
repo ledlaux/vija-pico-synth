@@ -29,7 +29,7 @@ The synthesizer operates in three primary display modes:
    * **FILTER:** Enable/Disable the Filter  
 
    * **ARPEGGIATOR:**  
-     - **ARP:** Enable/Disable arpeggiator  
+     - **ARP:** Enable/Disable 
      - **MODE:** UP / DOWN / UPDN / PLAY / RAND  
      - **DIV:** Note division (e.g. 1/4, 1/8, triplet, dotted)  
      - **OCT:** Octave range  
