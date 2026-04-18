@@ -32,7 +32,7 @@
          - Flash size: 4MB (Sketch:1MB, FS:3MB)
          - Optimize: Optimize Even More (-O3)
          - Sample rate: 48000
-          - USB stack: Adafruit TinyUSB 
+         - USB stack: Adafruit TinyUSB 
   
   Software:
  - BRAIDS and STMLIB libraries ported by Mark Washeim:
