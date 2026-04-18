@@ -10,7 +10,7 @@ in semi-modular format.
 * **40+ Oscillator Engines:** Includes VA, FM, Additive, Wavetable, Physical Modeling and Drums.
 * **Polyphony:** Per-sample AR (Attack-Release) envelopes.
 * **OLED Interface:** Real-time feedback with a menu system and a oscilloscope.
-* **Modulation:** 2 pots, CV input and midi cc.
+* **Modulation:** 2 pots, CV input and MIDI CC.
 * **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance.
 * **Dual MIDI:** Support for both USB MIDI and classic UART MIDI.
 * **Arpeggiator** with midi sync.
