@@ -25,17 +25,19 @@
 
     RP2040: 
             - Flash size: 2MB (Sketch:1MB, FS:1MB)
+            - CPU Speed: 240mhz (Overclock)  
             - Optimize: Optimize Even More (-O3)
-            - CPU Speed: 240mhz (Overclock)   
+            - USB stack: Adafruit TinyUSB 
             - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
-            - USB stack: Adafruit TinyUSB 
-  RP2350:
+
+    RP2350:
             - Flash size: 4MB (Sketch:1MB, FS:3MB)
+            - CPU Speed: 240mhz (Overclock)  
             - Optimize: Optimize Even More (-O3)
-            - Sample rate: 48000
             - USB stack: Adafruit TinyUSB 
+            - Sample rate: 48000
   
-  Software:
+  Source code:
  - BRAIDS and STMLIB libraries ported by Mark Washeim:
   https://github.com/poetaster/arduinoMI (MIT License)
 
