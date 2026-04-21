@@ -8,7 +8,7 @@
 
   Features:
   - 40+ digital oscillator engines
-  - Polyphonic, ADSR envelope
+  - Polyphonic, per-sample AR envelopes
   - USB or UART MIDI input
   - Filter (SVF)
   - OLED display with menu system & oscilloscope
@@ -151,6 +151,7 @@ const char *const engine_names[] = {
 };
 
 constexpr int NUM_ENGINES = sizeof(engine_names) / sizeof(engine_names[0]);
+
 
 enum EnvStage { IDLE, ATTACK, DECAY, SUSTAIN, RELEASE };
 EnvStage stage;
@@ -553,6 +554,34 @@ void __not_in_flash_func(updateAudio)() {
     lastR = env_release_s;
   }
 
+
+  // Exponential Envelope TEST
+
+// static float aCoeff = 0.0f;
+// static float dCoeff = 0.0f;
+// static float rCoeff = 0.0f;
+
+// static float lastA = -1, lastD = -1, lastR = -1;
+
+// if (env_attack_s != lastA) {
+//   float t = fmaxf(env_attack_s, 0.0001f);
+//   aCoeff = expf(-1.0f / (SAMPLE_RATE * t));
+//   lastA = env_attack_s;
+// }
+
+// if (env_decay_s != lastD) {
+//   float t = fmaxf(env_decay_s, 0.0001f);
+//   dCoeff = expf(-1.0f / (SAMPLE_RATE * t));
+//   lastD = env_decay_s;
+// }
+
+// if (env_release_s != lastR) {
+//   float t = fmaxf(env_release_s, 0.0001f);
+//   rCoeff = expf(-1.0f / (SAMPLE_RATE * t));
+//   lastR = env_release_s;
+// }
+
+
   static float fm_slew = 0.0f;
   static float timb_slew = 0.0f;
   static float color_slew = 0.0f;
@@ -644,7 +673,63 @@ void __not_in_flash_func(updateAudio)() {
     }
 
     voice.env = env;
+  
   }
+
+// Exponential Envelope TEST
+
+// float env = voice.env;
+
+// for (int i = 0; i < AUDIO_BLOCK; i++) {
+
+//   switch (voice.stage) {
+
+//     case ATTACK: {
+//         float target = 1.0f;
+//         env += (target - env) * (1.0f - aCoeff);
+
+//         if (env >= 0.999f) {
+//           env = 1.0f;
+//           voice.stage = DECAY;
+//         }
+//         break;
+//       }
+
+//     case DECAY:
+//       env = env_sustain + (env - env_sustain) * dCoeff;
+//       if (env <= env_sustain + 0.001f) {
+//         env = env_sustain;
+//         voice.stage = SUSTAIN;
+//       }
+//       break;
+
+//     case SUSTAIN:
+//       env = env_sustain;
+//       break;
+
+//     case RELEASE:
+//       env = env * rCoeff;
+//       if (env <= 0.001f) {
+//         env = 0.0f;
+//         voice.stage = IDLE;
+//         voice.active = false;
+//         voice.sustained = false;
+//       }
+//       break;
+
+//     case IDLE:
+//     default:
+//       env = 0.0f;
+//       break;
+//   }
+
+//   float s = voice.buffer[i] * 0.000030517578125f;
+//   mix[i] += s * env * voice.vel_smoothed * block_gain;
+// }
+
+// voice.env = env;
+
+//   }
 
   // -------------------------
   // OSCILLOSCOPE
