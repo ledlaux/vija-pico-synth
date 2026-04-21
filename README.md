@@ -15,7 +15,6 @@ in semi-modular format.
 * **MIDI:** Support for both USB MIDI and classic UART MIDI.
 * **Quantizer:** MIDI note quantization according to the selected scale.
 * **Arpeggiator:** Different modes, divisions and MIDI sync.
-
 ---
 
 ## 🕹 Menu System & UI
@@ -39,7 +38,7 @@ The synthesizer operates in three primary display modes:
    * **MIDI:** Enable MIDI CC and disable CV  
    * **MIDI CH:** Set the input channel (1–16)  
    * **OSCILLOSCOPE:** Toggle On / Off  
-   * **SAVE SETTINGS:** Long press to save menu settings  
+   * **SAVE:** Long press to save menu settings and last used engine 
    * **EXIT MENU:**  Double click 
 3. **OSCILLOSCOPE:** Automatically engages after 10 seconds to visualize the current waveform  
 ### Filter Mode (Default)
