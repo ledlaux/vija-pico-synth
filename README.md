@@ -13,7 +13,8 @@ in semi-modular format.
 * **Modulation:** 2 pots, CV input and MIDI CC.
 * **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance.
 * **MIDI:** Support for both USB MIDI and classic UART MIDI.
-* **Arpeggiator** with MIDI sync.
+* **Quantizer:** MIDI note quantization according to the selected scale.
+* **Arpeggiator:** Different modes, divisions and MIDI sync.
 
 ---
 
@@ -26,23 +27,20 @@ The synthesizer operates in three primary display modes:
 2. **SETTINGS:** Click the encoder button to cycle through parameters  
    * **VOLUME:** Global gain control  
    * **A/R ENVELOPES:** Adjust the "snappiness" (Attack) or "fade" (Release) of notes  
-   * **FILTER:** Enable/Disable the Filter  
-
+   * **QUANTIZER**: Select scale to adjust MIDI note pitch quantization 
    * **ARPEGGIATOR:**  
      - **ARP:** Enable/Disable 
      - **MODE:** UP / DOWN / UPDN / PLAY / RAND  
      - **DIV:** Note division (e.g. 1/4, 1/8, triplet, dotted)  
      - **OCT:** Octave range  
      - **LATCH:** Hold notes after release  
-
+   * **FILTER:** Enable/Disable the Filter  
    * **CV:** CV modulation mode  
    * **MIDI:** Enable MIDI CC and disable CV  
    * **MIDI CH:** Set the input channel (1–16)  
-
    * **OSCILLOSCOPE:** Toggle On / Off  
    * **SAVE SETTINGS:** Long press to save menu settings  
    * **EXIT MENU:**  Double click 
-
 3. **OSCILLOSCOPE:** Automatically engages after 10 seconds to visualize the current waveform  
 ### Filter Mode (Default)
 
@@ -169,6 +167,7 @@ Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP1**.
   
 ---
 ##  Version history
+* 2026-04--- - v1.0.4 (+ quantizer)
 * 2026-04-18 - v1.0.3 (+ arpeggiator)
 * 2026-02-26 - v1.0.2 
 * 2026-02-03 - v1.0.1  
