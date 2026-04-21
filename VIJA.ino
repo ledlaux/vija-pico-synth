@@ -1,5 +1,5 @@
 /*
-  VIJA (v1.0.3) 
+  VIJA (v1.0.4) 
 
   Copyright (c) 2026 Vadims Maksimovs ledlaux.github.com | GPLv3
   
@@ -8,12 +8,13 @@
 
   Features:
   - 40+ digital oscillator engines
-  - Polyphonic, per-sample AR envelopes
+  - Polyphonic, ADSR envelope
   - USB or UART MIDI input
   - Filter (SVF)
   - OLED display with menu system & oscilloscope
   - Synth controls via potentiometers, CV or MIDI CC
-  - Arpeggiator (midi sync)
+  - Arpeggiator (MIDI sync)
+  - MIDI note quantization according to the selected scale
   
   Hardware:
   - RP2040 or RP2350 board, I2S PCM5102 DAC, SSD1306 OLED, rotary encoder with button, 2 pots, 2 cv jacks or 2 more pots
@@ -25,19 +26,17 @@
 
     RP2040: 
             - Flash size: 2MB (Sketch:1MB, FS:1MB)
-            - CPU Speed: 240mhz (Overclock)  
             - Optimize: Optimize Even More (-O3)
-            - USB stack: Adafruit TinyUSB 
-            - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
-
-    RP2350:
+            - CPU Speed: 240mhz (Overclock)   
+            - USB stack: Adafruit TinyUSB
+            - Sample rate: 32000 (4 voices) / 44100 (3 voices)   
+  RP2350:
             - Flash size: 4MB (Sketch:1MB, FS:3MB)
-            - CPU Speed: 240mhz (Overclock)  
             - Optimize: Optimize Even More (-O3)
             - USB stack: Adafruit TinyUSB 
             - Sample rate: 48000
   
-  Source code:
+  Software:
  - BRAIDS and STMLIB libraries ported by Mark Washeim:
   https://github.com/poetaster/arduinoMI (MIT License)
 
@@ -78,8 +77,8 @@
 
 #define USE_POTS 0
 #define POT_TIMBRE A0      // GPIO26
-#define POT_COLOR A1       // GPIO27
-#define POT_TIMBRE_MOD A2  // GPIO28
+#define POT_COLOR A2       // GPIO27
+#define POT_TIMBRE_MOD A1  // GPIO28
 #define POT_COLOR_MOD A3   // GPIO29
 
 #define ENCODER_SW 6
@@ -118,8 +117,6 @@ const unsigned char waveform_bitmap[] PROGMEM = {
   0b00000000, 0b00000000, 0b00000000, 0b00000000
 };
 
-const char *SETTINGS_FILE = "/vija_settings.json";
-
 enum DisplayMode { ENGINE_SELECT_MODE,
                    SETTINGS_MODE,
                    OSCILLOSCOPE_MODE };
@@ -127,7 +124,9 @@ enum DisplayMode { ENGINE_SELECT_MODE,
 enum EncoderState { ENGINE_SELECT,
                     VOLUME_ADJUST,
                     ATTACK_ADJUST,
+                    DECAY_ADJUST,
                     RELEASE_ADJUST,
+                    QNTZ,
                     ARP_TOGGLE,
                     ARP_MODE,
                     ARP_DIV,
@@ -140,6 +139,66 @@ enum EncoderState { ENGINE_SELECT,
                     MIDI_CH,
                     SCOPE_TOGGLE };
 
+const char *SETTINGS_FILE = "/vija_settings.json";
+
+const char *const engine_names[] = {
+  "CSAW", "/\\-_", "//-_", "FOLD", "uuuu", "SUB-", "SUB/", "SYN-", "SYN/",
+  "//x3", "-_x3", "/\\x3", "SIx3", "RING", "////", "//uu", "TOY*", "ZLPF", "ZPKF",
+  "ZBPF", "ZHPF", "VOSM", "VOWL", "VFOF", "HARM", "-FM-", "FBFM", "WTFM",
+  "PLUK", "BOWD", "BLOW", "FLUT", "BELL", "DRUM", "KICK", "CYMB", "SNAR",
+  "WTBL", "WMAP", "WLIN", "WTx4", "NOIS", "TWNQ", "CLKN", "CLOU", "PRTC",
+  "QPSK", "????"
+};
+
+constexpr int NUM_ENGINES = sizeof(engine_names) / sizeof(engine_names[0]);
+
+enum EnvStage { IDLE, ATTACK, DECAY, SUSTAIN, RELEASE };
+EnvStage stage;
+
+struct Voice {
+  braids::MacroOscillator osc;
+  int pitch;
+  int midi_note;
+  float velocity;
+  float vel_smoothed;
+  bool active;
+  bool last_trig;
+  float env;
+  float sustain_level;   
+  float attack_coef;
+  float decay_coef;
+  float release_coef;
+  EnvStage stage;
+  int16_t buffer[AUDIO_BLOCK];
+  uint8_t sync_buffer[AUDIO_BLOCK];
+  uint32_t age;
+  bool sustained;
+};
+
+braids::Quantizer quantizer;
+int32_t quant_scale_idx = 0;
+const int kNumScales = sizeof(braids::scales) / sizeof(braids::Scale);
+
+const char *scale_names[] = {
+  "OFF", "SEMI", "IONN", "DORN", "PHRY", "LYDN", "MIXO", "AEOL", "LOCR",
+  "BLU+", "BLU-", "PEN+", "PEN-", "FOLK", "JAPN", "GAME", "GYPS", "ARAB",
+  "FLAM", "WHLT", "PYTH", "1/4E", "1/4e", "1/4a", "BHAI", "GUNA", "MARW",
+  "SHRE", "PURV", "BILA", "YAMA", "KAFI", "BHIM", "DARB", "RAGE", "KHAM",
+  "MIMA", "PARA", "RANG", "GANG", "KAME", "PKAF", "NATB", "MKAU", "BAIR",
+  "BTOD", "CHAN", "KAUS", "JOGE"
+};
+
+
+struct ArpSettings {
+  bool enabled;
+  bool latch;
+  uint8_t mode;
+  uint8_t division;
+  uint8_t octaves;
+};
+
+const uint8_t arpDivTable[] = { 96, 48, 24, 18, 12, 9, 8, 6, 4, 3 };
+const int NUM_DIVS = 10;
 
 #define MAX_ARP_NOTES 12
 
@@ -149,97 +208,6 @@ enum ArpDirection { UP,
                     RANDOM,
                     AS_PLAYED };
 
-volatile uint8_t midi_ch = 1;
-volatile int engine_idx = 1;
-static int last_engine_idx = -1;
-volatile float timbre_in = 0.4f;
-volatile float color_in = 0.3f;
-volatile float fm_mod = 0.0f;
-volatile float timb_mod_midi = 0.0f;
-volatile float color_mod_midi = 0.0f;
-volatile float timb_mod_cv = 0.0f;
-volatile float color_mod_cv = 0.0f;
-volatile float fm_target = 0.0f;
-
-volatile float master_volume = 0.7f;
-volatile float env_attack_s = 0.009f;
-volatile float env_release_s = 0.01f;
-static float attackCoef = 0.0f;
-static float releaseCoef = 0.0f;
-volatile bool sustain_enabled = false;
-
-volatile bool engine_updated = true;
-volatile bool env_params_changed = true;
-volatile unsigned long last_param_change = 0;
-unsigned long last_midi_lock_time = 0;
-
-volatile bool midi_mod = true;
-volatile bool cv_mod1 = false;
-volatile bool cv_mod2 = false;
-
-volatile float timbre_midi_target = 0.0f;
-volatile float color_midi_target = 0.0f;
-volatile bool timbre_locked = false;
-volatile bool color_locked = false;
-
-volatile bool filter_enabled = false;
-volatile float filter_mix = 1.0f;
-volatile uint8_t filter_cutoff_cc = 64;
-volatile uint8_t filter_resonance_cc = 32;
-
-volatile bool save_requested = false;
-static bool show_saved_flag = false;
-static unsigned long saved_start_time = 0;
-static const unsigned long SAVED_DISPLAY_MS = 800;
-
-volatile bool oscilloscope_enabled = true;
-volatile float scope_buffer_front[SCOPE_WIDTH];
-volatile float scope_buffer_back[SCOPE_WIDTH];
-
-const unsigned long AUTO_REVERT_MS = 4000;
-volatile unsigned long last_encoder_activity = 0;
-volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
-volatile EncoderState enc_state = ENGINE_SELECT;
-
-volatile int displayTimbre = 0;
-volatile int displayColor = 0;
-
-volatile bool system_ready = false;
-
-// For UI updates
-float pot_timbre = 0.5f;
-float pot_color = 0.5f;
-
-#if USE_SCREEN
-static int last_engine_draw = -1;
-static unsigned long last_draw_time = 0;
-static int lBtn = HIGH;
-#endif
-
-volatile float scope_buffer[SCOPE_WIDTH];
-volatile bool scope_ready = false;
-
-struct Voice {
-  braids::MacroOscillator osc;
-  int pitch;
-  float velocity;
-  float vel_smoothed;
-  bool active;
-  bool last_trig;
-  float env;
-  int16_t buffer[AUDIO_BLOCK];
-  uint8_t sync_buffer[AUDIO_BLOCK];
-  uint32_t age;
-  bool sustained;
-};
-
-struct ArpSettings {
-  bool enabled;
-  bool latch;
-  uint8_t mode;
-  uint8_t division;
-  uint8_t octaves;
-};
 
 struct SynthSettings {
   float master_volume;
@@ -285,9 +253,80 @@ SynthSettings settings = {
     .octaves = 2 }
 };
 
+volatile uint8_t midi_ch = 1;
+volatile int engine_idx = 1;
+static int last_engine_idx = -1;
+volatile float timbre_in = 0.4f;
+volatile float color_in = 0.3f;
+volatile float fm_mod = 0.0f;
+volatile float timb_mod_midi = 0.0f;
+volatile float color_mod_midi = 0.0f;
+volatile float timb_mod_cv = 0.0f;
+volatile float color_mod_cv = 0.0f;
+volatile float fm_target = 0.0f;
+
+volatile float master_volume = 0.7f;
+volatile float env_attack_s = 0.01f;
+volatile float env_release_s = 0.01f;
+volatile float env_decay_s = 0.1f;
+volatile float env_sustain = 0.7f;
+volatile bool sustain_enabled = false;
+
+volatile bool engine_updated = true;
+volatile bool env_params_changed = true;
+volatile unsigned long last_param_change = 0;
+unsigned long last_midi_lock_time = 0;
+
+volatile bool midi_mod = true;
+volatile bool cv_mod1 = false;
+volatile bool cv_mod2 = false;
+
+volatile float timbre_midi_target = 0.0f;
+volatile float color_midi_target = 0.0f;
+volatile bool timbre_locked = false;
+volatile bool color_locked = false;
+
+volatile bool filter_enabled = false;
+volatile float filter_mix = 1.0f;
+volatile uint8_t filter_cutoff_cc = 64;
+volatile uint8_t filter_resonance_cc = 32;
+
+volatile bool save_requested = false;
+static bool show_saved_flag = false;
+static unsigned long saved_start_time = 0;
+static const unsigned long SAVED_DISPLAY_MS = 800;
+
+volatile bool oscilloscope_enabled = true;
+volatile float scope_buffer_front[SCOPE_WIDTH];
+volatile float scope_buffer_back[SCOPE_WIDTH];
+
+const unsigned long AUTO_REVERT_MS = 4000;
+volatile unsigned long last_encoder_activity = 0;
+volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
+volatile EncoderState enc_state = ENGINE_SELECT;
+
+volatile bool quantizer_dirty = false;
+
+volatile int displayTimbre = 0;
+volatile int displayColor = 0;
+
+volatile bool system_ready = false;
+
+// For UI updates
+float pot_timbre = 0.5f;
+float pot_color = 0.5f;
+
+#if USE_SCREEN
+static int last_engine_draw = -1;
+static unsigned long last_draw_time = 0;
+static int lBtn = HIGH;
+#endif
+
+volatile float scope_buffer[SCOPE_WIDTH];
+volatile bool scope_ready = false;
+
 Voice voices[MAX_VOICES];
 uint32_t global_age = 0;
-float attack_coeff_cached, release_coeff_cached;
 
 I2S i2s_output(OUTPUT);
 
@@ -309,87 +348,140 @@ Adafruit_SH1106G display = Adafruit_SH1106G(128, 64, &Wire, -1);
 
 #endif
 
-const char *const engine_names[] = {
-  "CSAW", "/\\-_", "//-_", "FOLD", "uuuu", "SUB-", "SUB/", "SYN-", "SYN/",
-  "//x3", "-_x3", "/\\x3", "SIx3", "RING", "////", "//uu", "TOY*", "ZLPF", "ZPKF",
-  "ZBPF", "ZHPF", "VOSM", "VOWL", "VFOF", "HARM", "-FM-", "FBFM", "WTFM",
-  "PLUK", "BOWD", "BLOW", "FLUT", "BELL", "DRUM", "KICK", "CYMB", "SNAR",
-  "WTBL", "WMAP", "WLIN", "WTx4", "NOIS", "TWNQ", "CLKN", "CLOU", "PRTC",
-  "QPSK", "????"
-};
-
-constexpr int NUM_ENGINES = sizeof(engine_names) / sizeof(engine_names[0]);
-
-const uint8_t arpDivTable[] = { 96, 48, 24, 18, 12, 9, 8, 6, 4, 3 };
-const int NUM_DIVS = 10;
-
 struct Arpeggiator {
+  // --- runtime control ---
   volatile bool enabled = false;
   volatile bool latch_enabled = false;
   volatile int physicalKeys = 0;
+
   volatile ArpDirection mode = AS_PLAYED;
   volatile uint8_t division = 6;
   volatile uint8_t octaves = 1;
 
+  // --- note storage ---
   int heldNotes[MAX_ARP_NOTES];
-  int sortedNotes[MAX_ARP_NOTES];
+  int sortedNotes[MAX_ARP_NOTES * 4];
   volatile int numHeld = 0;
-
+  int numSorted = 0;
   int currentStep = -1;
+  bool directionUp = true;
   int lastVoiceIndices[MAX_VOICES];
   int lastPitchCount = 0;
-  bool directionUp = true;
   uint32_t tickCounter = 0;
 
-  void __not_in_flash_func(addNote)(int pitch) {
-    if (numHeld < MAX_ARP_NOTES) {
-      heldNotes[numHeld++] = pitch;
-      updateSort();
+  void addNote(int pitch) {
+    if (numHeld >= MAX_ARP_NOTES) return;
+
+    // prevent duplicates
+    for (int i = 0; i < numHeld; i++) {
+      if (heldNotes[i] == pitch) return;
     }
+
+    int q = pitch;
+
+    if (quant_scale_idx > 0) {
+      q = quantizer.Process(pitch << 7) >> 7;
+    }
+
+    heldNotes[numHeld++] = q;
+    rebuild();
   }
 
   void __not_in_flash_func(removeNote)(int pitch) {
     for (int i = 0; i < numHeld; i++) {
       if (heldNotes[i] == pitch) {
-        for (int j = i; j < numHeld - 1; j++) heldNotes[j] = heldNotes[j + 1];
+        for (int j = i; j < numHeld - 1; j++) {
+          heldNotes[j] = heldNotes[j + 1];
+        }
         numHeld--;
-        updateSort();
+        rebuild();
         break;
       }
     }
-    if (numHeld == 0) currentStep = -1;
+
+    if (numHeld == 0) {
+      currentStep = -1;
+      numSorted = 0;
+    }
   }
 
-  void __not_in_flash_func(updateSort)() {
-    int count = 0;
-    // Fill the buffer with base notes + octave offsets
+  void __not_in_flash_func(rebuild)() {
+    numSorted = 0;
+
     for (int oct = 0; oct < octaves; oct++) {
       for (int i = 0; i < numHeld; i++) {
-        if (count < MAX_ARP_NOTES) {
-          sortedNotes[count++] = heldNotes[i] + (oct * 12);
-        }
+        int idx = numSorted;
+        if (idx >= (int)(sizeof(sortedNotes) / sizeof(sortedNotes[0]))) break;
+        sortedNotes[numSorted++] = heldNotes[i] + (oct * 12);
       }
     }
 
-    for (int i = 0; i < count - 1; i++) {
-      for (int j = 0; j < count - i - 1; j++) {
+    for (int i = 0; i < numSorted - 1; i++) {
+      for (int j = 0; j < numSorted - i - 1; j++) {
         if (sortedNotes[j] > sortedNotes[j + 1]) {
-          int temp = sortedNotes[j];
+          int t = sortedNotes[j];
           sortedNotes[j] = sortedNotes[j + 1];
-          sortedNotes[j + 1] = temp;
+          sortedNotes[j + 1] = t;
         }
       }
     }
+    currentStep = -1;
   }
 
   void __not_in_flash_func(clear)() {
     numHeld = 0;
+    numSorted = 0;
     currentStep = -1;
     lastPitchCount = 0;
+    directionUp = true;
+    tickCounter = 0;
+  }
+
+  int nextStep() {
+    if (numSorted == 0) return -1;
+
+    int total = numSorted;
+
+    switch (mode) {
+      case UP:
+      case AS_PLAYED:
+        currentStep = (currentStep + 1) % total;
+        break;
+
+      case DOWN:
+        currentStep = (currentStep <= 0) ? total - 1 : currentStep - 1;
+        break;
+
+      case RANDOM:
+        currentStep = random(0, total);
+        break;
+
+      case UP_DOWN:
+        if (directionUp) {
+          currentStep++;
+          if (currentStep >= total - 1) {
+            currentStep = total - 1;
+            directionUp = false;
+          }
+        } else {
+          currentStep--;
+          if (currentStep <= 0) {
+            currentStep = 0;
+            directionUp = true;
+          }
+        }
+        break;
+    }
+
+    if (currentStep < 0) currentStep = 0;
+    if (currentStep >= total) currentStep = 0;
+
+    return sortedNotes[currentStep];
   }
 };
 
 Arpeggiator arp;
+
 
 int __not_in_flash_func(findFreeVoice)() {
   int oldest = 0;
@@ -411,9 +503,12 @@ int __not_in_flash_func(findFreeVoice)() {
 }
 
 
-int __not_in_flash_func(findVoiceByPitch)(int pitch) {
-  for (int i = 0; i < MAX_VOICES; i++)
-    if (voices[i].active && voices[i].pitch == pitch) return i;
+int findVoiceByPitch(int pitch) {
+  for (int i = 0; i < MAX_VOICES; i++) {
+    if (voices[i].active && voices[i].midi_note == pitch) {
+      return i;
+    }
+  }
   return -1;
 }
 
@@ -421,101 +516,140 @@ int __not_in_flash_func(findVoiceByPitch)(int pitch) {
 void __not_in_flash_func(updateAudio)() {
 
   if (engine_idx != last_engine_idx) {
-    braids::MacroOscillatorShape shape =
-      (braids::MacroOscillatorShape)engine_idx;
-
-    for (int v = 0; v < MAX_VOICES; v++)
+    auto shape = (braids::MacroOscillatorShape)engine_idx;
+    for (int v = 0; v < MAX_VOICES; v++) {
       voices[v].osc.set_shape(shape);
-
+    }
     last_engine_idx = engine_idx;
   }
 
-  if (env_params_changed) {
-    attackCoef = 1.0f - expf(-1.0f / (SAMPLE_RATE * env_attack_s));
-    releaseCoef = 1.0f - expf(-1.0f / (SAMPLE_RATE * env_release_s));
-    env_params_changed = false;
+  float mix[AUDIO_BLOCK] = {0};
+  const float block_gain = master_volume * 0.25f;
+
+  // -------------------------
+  // ENVELOPE 
+  // -------------------------
+  static float attackStep = 0.0f;
+  static float decayStep = 0.0f;
+  static float releaseStep = 0.0f;
+
+  static float lastA = -1.0f, lastD = -1.0f, lastR = -1.0f;
+
+  if (env_attack_s != lastA) {
+    float a = fmaxf(env_attack_s, 0.0001f);
+    attackStep = 1.0f / (SAMPLE_RATE * a);
+    lastA = env_attack_s;
   }
 
-  float mix[AUDIO_BLOCK] = { 0 };
+  if (env_decay_s != lastD) {
+    float d = fmaxf(env_decay_s, 0.0001f);
+    decayStep = 1.0f / (SAMPLE_RATE * d);
+    lastD = env_decay_s;
+  }
+
+  if (env_release_s != lastR) {
+    float r = fmaxf(env_release_s, 0.0001f);
+    releaseStep = 1.0f / (SAMPLE_RATE * r);
+    lastR = env_release_s;
+  }
 
   static float fm_slew = 0.0f;
   static float timb_slew = 0.0f;
   static float color_slew = 0.0f;
 
-  if (midi_mod) {
-    fm_target = fm_mod;
-  } else if (cv_mod1) {
-    fm_target = 0.0f;
-  } else if (filter_enabled) {
-    fm_target = 0.0f;
-  } else {
-    fm_target = fm_mod;
-  }
+  float timb_target = midi_mod ? timb_mod_midi
+                     : cv_mod1 ? timb_mod_cv : 0.0f;
 
-  float timb_target = midi_mod  ? timb_mod_midi
-                      : cv_mod1 ? timb_mod_cv
-                                : 0.0f;
+  float color_target = midi_mod ? color_mod_midi
+                      : cv_mod1 ? color_mod_cv : 0.0f;
 
-  float color_target = midi_mod  ? color_mod_midi
-                       : cv_mod1 ? color_mod_cv
-                                 : 0.0f;
-
-  auto apply_stable_slew = [](float &current, float target, float coefficient) {
-    float diff = target - current;
-    float abs_diff = fabsf(diff);
-
-    if (abs_diff < 0.005f) {
-      if (target == 0.0f && abs_diff < 0.01f) current = 0.0f;
-      return;
-    }
-
-    if (abs_diff < 0.001f) {
-      current = target;
-    } else {
-      current += diff * coefficient;
-    }
+  auto slew = [](float &c, float t, float a) {
+    c += (t - c) * a;
   };
 
-  apply_stable_slew(fm_slew, fm_target, 0.05f);
-  apply_stable_slew(timb_slew, timb_target, 0.01f);
-  apply_stable_slew(color_slew, color_target, 0.01f);
+  slew(fm_slew, fm_mod, 0.05f);
+  slew(timb_slew, timb_target, 0.01f);
+  slew(color_slew, color_target, 0.01f);
 
-  const float block_gain = master_volume * 0.25f;
-
+  // -------------------------
+  // VOICES
+  // -------------------------
   for (int v = 0; v < MAX_VOICES; v++) {
+
     Voice &voice = voices[v];
 
-    if (!voice.active && !voice.sustained && voice.env < 0.0001f)
+    if (!voice.active && voice.stage == RELEASE && voice.env <= 0.0001f)
       continue;
 
     voice.vel_smoothed += (voice.velocity - voice.vel_smoothed) * 0.25f;
 
-    float pitch = voice.pitch * 128.0f + fm_slew * 1536.0f;
-    voice.osc.set_pitch(pitch);
+    voice.osc.set_pitch((float)voice.pitch);
 
     float t = constrain(timbre_in + timb_slew, 0.0f, 1.0f);
     float m = constrain(color_in + color_slew, 0.0f, 1.0f);
+
     voice.osc.set_parameters(t * 32767.0f, m * 32767.0f);
 
-    if (voice.active && !voice.last_trig)
+    if (voice.stage == ATTACK && voice.env < 0.001f)
       voice.osc.Strike();
 
     voice.last_trig = voice.active;
+
     voice.osc.Render(voice.sync_buffer, voice.buffer, AUDIO_BLOCK);
 
-    float envTarget = (voice.active || voice.sustained) ? 1.0f : 0.0f;
-    float coef = envTarget ? attackCoef : releaseCoef;
+    float env = voice.env;
 
     for (int i = 0; i < AUDIO_BLOCK; i++) {
-      voice.env += (envTarget - voice.env) * coef;
-      if (voice.env < 0.0001f) voice.env = 0.0f;
 
-      mix[i] += (voice.buffer[i] * 0.000030517578125f) * (voice.env * voice.vel_smoothed * block_gain);
+      switch (voice.stage) {
+
+        case ATTACK:
+          env += attackStep;
+          if (env >= 1.0f) {
+            env = 1.0f;
+            voice.stage = DECAY;
+          }
+          break;
+
+        case DECAY:
+          env -= decayStep;
+          if (env <= env_sustain) {
+            env = env_sustain;
+            voice.stage = SUSTAIN;
+          }
+          break;
+
+        case SUSTAIN:
+          env = env_sustain;
+          break;
+
+        case RELEASE:
+          env -= releaseStep;
+          if (env <= 0.0f) {
+            env = 0.0f;
+            voice.stage = IDLE;
+            voice.active = false;
+            voice.sustained = false;
+          }
+          break;
+
+        case IDLE:
+        default:
+          env = 0.0f;
+          break;
+      }
+
+      float s = voice.buffer[i] * 0.000030517578125f;
+      mix[i] += s * env * voice.vel_smoothed * block_gain;
     }
+
+    voice.env = env;
   }
 
-
-  static int scope_idx = 0;
+  // -------------------------
+  // OSCILLOSCOPE
+  // -------------------------
+   static int scope_idx = 0;
   static float scopeSmooth = 0.0f;
   if (oscilloscope_enabled && !scope_ready) {
     for (int i = 0; i < AUDIO_BLOCK; i += 4) {
@@ -532,6 +666,9 @@ void __not_in_flash_func(updateAudio)() {
     }
   }
 
+  // -------------------------
+  // FILTER (unchanged logic)
+  // -------------------------
   static float cut_slew = 0.0f;
   static float res_slew = 0.0f;
   static float mix_slew = 0.0f;
@@ -551,14 +688,203 @@ void __not_in_flash_func(updateAudio)() {
   const float wet_scale = mix_slew;
 
   for (int i = 0; i < AUDIO_BLOCK; i++) {
-    float dry_f = mix[i];
-    int32_t dry_int = (int32_t)(dry_f * 32767.0f);
-    float wet_f = global_filter.Process(dry_int);
-    float mixed_signal = (dry_f * dry_scale) + (wet_f * wet_scale);
-    int16_t s = (int16_t)fmaxf(-32767.0f, fminf(32767.0f, mixed_signal));
+    float dry = mix[i];
+    int32_t dry_i = (int32_t)(dry * 32767.0f);
+    float wet = global_filter.Process(dry_i);
+
+    float out = (dry * dry_scale) + (wet * wet_scale);
+
+    int16_t s = (int16_t)fmaxf(-32767.0f, fminf(32767.0f, out));
     i2s_output.write16(s, s);
   }
 }
+
+// void __not_in_flash_func(updateAudio)() {
+
+//   if (engine_idx != last_engine_idx) {
+//     auto shape = (braids::MacroOscillatorShape)engine_idx;
+
+//     for (int v = 0; v < MAX_VOICES; v++)
+//       voices[v].osc.set_shape(shape);
+
+//     last_engine_idx = engine_idx;
+//   }
+
+//   float mix[AUDIO_BLOCK] = {0};
+
+//   const float block_gain = master_volume * 0.25f;
+
+//   // Precompute ADSR coefficients
+//   // const float attackStep  = 1.0f / (SAMPLE_RATE * max(0.0001f, env_attack_s));
+//   // const float releaseStep = 1.0f / (SAMPLE_RATE * max(0.0001f, env_release_s));
+//   // const float decayStep   = 1.0f / (SAMPLE_RATE * max(0.0001f, env_decay_s));
+
+
+// static float attackStep = 0.0f;
+// static float releaseStep = 0.0f;
+// static float decayStep = 0.0f;
+// static float lastA = -1, lastR = -1, lastD = -1;
+
+// if (env_attack_s != lastA) {
+//   attackStep = 1.0f / (SAMPLE_RATE * env_attack_s);
+//   lastA = env_attack_s;
+// }
+
+// if (env_release_s != lastR) {
+//   releaseStep = 1.0f / (SAMPLE_RATE * env_release_s);
+//   lastR = env_release_s;
+// }
+
+
+// if (env_decay_s != lastD) {
+//   decayStep = 1.0f / (SAMPLE_RATE * env_decay_s);
+//   lastD = env_decay_s;
+// }
+
+//   static float fm_slew = 0.0f;
+//   static float timb_slew = 0.0f;
+//   static float color_slew = 0.0f;
+
+//   float timb_target = midi_mod ? timb_mod_midi
+//                     : cv_mod1 ? timb_mod_cv : 0.0f;
+
+//   float color_target = midi_mod ? color_mod_midi
+//                      : cv_mod1 ? color_mod_cv : 0.0f;
+
+//   auto slew = [](float &c, float t, float a) {
+//     c += (t - c) * a;
+//   };
+
+//   slew(fm_slew, fm_mod, 0.05f);
+//   slew(timb_slew, timb_target, 0.01f);
+//   slew(color_slew, color_target, 0.01f);
+
+//   for (int v = 0; v < MAX_VOICES; v++) {
+
+//   Voice &voice = voices[v];
+
+//   if (!voice.active && voice.stage == RELEASE && voice.env <= 0.0001f)
+//     continue;
+
+//   voice.vel_smoothed += (voice.velocity - voice.vel_smoothed) * 0.25f;
+
+//   voice.osc.set_pitch((float)voice.pitch);
+
+//   float t = constrain(timbre_in + timb_slew, 0.0f, 1.0f);
+//   float m = constrain(color_in + color_slew, 0.0f, 1.0f);
+
+//   voice.osc.set_parameters(t * 32767.0f, m * 32767.0f);
+
+//   if (voice.stage == ATTACK && voice.env < 0.001f)
+//   voice.osc.Strike();
+
+//   voice.last_trig = voice.active;
+
+//   voice.osc.Render(voice.sync_buffer, voice.buffer, AUDIO_BLOCK);
+
+//   // -------------------------
+//   // PER-BLOCK ENVELOPE UPDATE
+//   // -------------------------
+// float env = voice.env;
+
+// for (int i = 0; i < AUDIO_BLOCK; i++) {
+
+//   switch (voice.stage) {
+
+//     case ATTACK:
+//       env += attackStep;
+//       if (env >= 1.0f) {
+//         env = 1.0f;
+//         voice.stage = DECAY;
+//       }
+//       break;
+
+//     case DECAY:
+//       env -= decayStep;
+//       if (env <= env_sustain) {
+//         env = env_sustain;
+//         voice.stage = SUSTAIN;
+//       }
+//       break;
+
+//     case SUSTAIN:
+//       env = env_sustain;
+//       break;
+
+//     case RELEASE:
+//       env -= releaseStep;
+//       if (env <= 0.0f) {
+//         env = 0.0f;
+//         voice.stage = IDLE;
+//         voice.active = false;
+//         voice.sustained = false;
+//       }
+//       break;
+
+//     case IDLE:
+//     default:
+//       env = 0.0f;
+//       break;
+//   }
+
+//   float s = voice.buffer[i] * 0.000030517578125f;
+
+//   mix[i] += s * env * voice.vel_smoothed * block_gain;
+// }
+// voice.env = env;
+//   }
+//   // -------------------------
+//   // OSCILLOSCOPE
+//   // -------------------------
+//    static int scope_idx = 0;
+//   static float scopeSmooth = 0.0f;
+//   if (oscilloscope_enabled && !scope_ready) {
+//     for (int i = 0; i < AUDIO_BLOCK; i += 4) {
+//       scopeSmooth += (mix[i] - scopeSmooth) * 0.25f;
+//       scope_buffer_front[scope_idx++] = scopeSmooth;
+//       if (scope_idx >= SCOPE_WIDTH) {
+//         memcpy((void *)scope_buffer_back,
+//                (const void *)scope_buffer_front,
+//                sizeof(scope_buffer_back));
+//         scope_ready = true;
+//         scope_idx = 0;
+//         break;
+//       }
+//     }
+//   }
+
+//   // -------------------------
+//   // FILTER (unchanged logic)
+//   // -------------------------
+//   static float cut_slew = 0.0f;
+//   static float res_slew = 0.0f;
+//   static float mix_slew = 0.0f;
+
+//   float cut_t = filter_cutoff_cc * (32767.0f / 127.0f);
+//   float res_t = filter_resonance_cc * (32767.0f / 127.0f);
+//   float mix_t = filter_enabled ? 1.0f : 0.0f;
+
+//   cut_slew += (cut_t - cut_slew) * 0.05f;
+//   res_slew += (res_t - res_slew) * 0.05f;
+//   mix_slew += (mix_t - mix_slew) * 0.01f;
+
+//   global_filter.set_frequency((uint16_t)cut_slew);
+//   global_filter.set_resonance((uint16_t)res_slew);
+
+//   const float dry_scale = (1.0f - mix_slew) * 32767.0f;
+//   const float wet_scale = mix_slew;
+
+//   for (int i = 0; i < AUDIO_BLOCK; i++) {
+//     float dry = mix[i];
+//     int32_t dry_i = (int32_t)(dry * 32767.0f);
+//     float wet = global_filter.Process(dry_i);
+
+//     float out = (dry * dry_scale) + (wet * wet_scale);
+
+//     int16_t s = (int16_t)fmaxf(-32767.0f, fminf(32767.0f, out));
+//     i2s_output.write16(s, s);
+//   }
+// }
 
 
 void drawScope() {
@@ -613,7 +939,14 @@ void drawEngineUI() {
   switch (enc_state) {
     case VOLUME_ADJUST: sprintf(menuBuf, "VOL:%3d", int(master_volume * 100)); break;
     case ATTACK_ADJUST: sprintf(menuBuf, "A:%.2f", env_attack_s); break;
+    case DECAY_ADJUST: sprintf(menuBuf, "D:%.2f", env_decay_s); break;
     case RELEASE_ADJUST: sprintf(menuBuf, "R:%.2f", env_release_s); break;
+
+    case QNTZ:
+      {
+        sprintf(menuBuf, "QNT:%s", scale_names[quant_scale_idx]);
+        break;
+      }
 
     case ARP_TOGGLE:
       sprintf(menuBuf, "ARP:%s", arp.enabled ? "ON" : "OFF");
@@ -725,10 +1058,13 @@ void __not_in_flash_func(triggerArpVoice)(int pitch) {
   int v = findFreeVoice();
   if (v < 0) return;
 
-  voices[v].pitch = pitch;
+  // Convert to Braids pitch format
+  voices[v].pitch = (int32_t)pitch << 7;
+
   voices[v].velocity = 0.8f;
   voices[v].active = true;
-  voices[v].env = 0.01f;
+  voices[v].env = 0.0f;
+  voices[v].stage = ATTACK;
   voices[v].age = global_age++;
   voices[v].last_trig = false;
 
@@ -743,7 +1079,7 @@ void __not_in_flash_func(advanceArp)() {
   for (int i = 0; i < arp.lastPitchCount; i++) {
     int v = arp.lastVoiceIndices[i];
     if (v >= 0 && v < MAX_VOICES) {
-      voices[v].active = false;
+      voices[v].stage = RELEASE;
     }
   }
   arp.lastPitchCount = 0;
@@ -798,7 +1134,13 @@ void __not_in_flash_func(advanceArp)() {
     } else {
       pitch = arp.sortedNotes[arp.currentStep];
     }
-    triggerArpVoice(pitch);
+    int finalPitch = pitch;
+
+    if (quant_scale_idx > 0) {
+      finalPitch = quantizer.Process(pitch << 7) >> 7;
+    }
+
+    triggerArpVoice(finalPitch);
   }
 }
 
@@ -923,19 +1265,33 @@ void __not_in_flash_func(handleMIDI)() {
         arp.removeNote(d1);
       }
     } else {
-      int i = findVoiceByPitch(d1);
+
+      int i = findVoiceByPitch(d1);  
+
       if (i >= 0) {
-        if (sustain_enabled) voices[i].sustained = true;
-        voices[i].active = false;
+        if (sustain_enabled) {
+          voices[i].sustained = true;
+        } else {
+          voices[i].stage = RELEASE;
+          voices[i].active = false;
+        }
       }
     }
+
   } else if (msgType == 0x90) {  // Note On
+
+    // 1. Convert MIDI note to Braids pitch units
+    int32_t quantized_pitch = (int32_t)d1 << 7;
+
+    // 2. Apply Quantization if a scale is selected
+    if (quant_scale_idx > 0) {
+      quantized_pitch = quantizer.Process(quantized_pitch);
+    }
+
     if (arp.enabled) {
       if (arp.latch_enabled && arp.physicalKeys == 0) {
         arp.clear();
-        for (int i = 0; i < MAX_VOICES; i++) voices[i].active = false;
-
-        // Reset sequence state for instant response
+        for (int i = 0; i < MAX_VOICES; i++) voices[i].stage = RELEASE;
         arp.currentStep = -1;
         arp.tickCounter = arp.division;
       }
@@ -943,7 +1299,6 @@ void __not_in_flash_func(handleMIDI)() {
       arp.physicalKeys++;
       arp.addNote(d1);
 
-      // INSTANT TRIGGER: Start playing immediately on the first key press
       if (arp.physicalKeys == 1) {
         advanceArp();
         arp.tickCounter = 0;
@@ -951,9 +1306,15 @@ void __not_in_flash_func(handleMIDI)() {
     } else {
       int v = findFreeVoice();
       if (v >= 0) {
-        voices[v].pitch = d1;
+        // Assign the quantized pitch to the voice
+        voices[v].midi_note = d1;
+        voices[v].pitch = quantized_pitch;
         voices[v].velocity = d2 / 127.f;
         voices[v].active = true;
+        voices[v].env = 0.0f;
+        voices[v].stage = ATTACK;
+
+        voices[v].sustained = false;  // Reset sustain state on new trigger
         voices[v].age = global_age++;
       }
     }
@@ -1019,8 +1380,8 @@ void loadSettings() {
   settings.env_attack_s = doc["atk"] | 0.001f;
   settings.env_release_s = doc["rel"] | 0.03f;
   settings.engine_idx = doc["eng"] | 1;
-  settings.filter_enabled = doc["filt"] | true;
-  settings.midi_mod = doc["mod"] | false;
+  settings.filter_enabled = doc["filt"] | false;
+  settings.midi_mod = doc["mod"] | true;
   settings.cv_mod1 = doc["cv1"] | false;
   settings.cv_mod2 = doc["cv2"] | false;
   settings.timbre_in = doc["timb"] | 0.4f;
@@ -1171,6 +1532,12 @@ void setup() {
   i2s_output.setBCLK(I2S_BCLK_PIN);
   i2s_output.begin();
 
+  quantizer.Init();
+
+  if (quant_scale_idx > 0) {
+    quantizer.Configure(braids::scales[quant_scale_idx]);
+  }
+
   for (int v = 0; v < MAX_VOICES; v++) {
     voices[v].osc.Init(SAMPLE_RATE);
     voices[v].active = false;
@@ -1232,6 +1599,20 @@ void loop1() {
 #if USE_SCREEN
   checkSavedFeedback();
 #endif
+
+  if (quantizer_dirty) {
+    if (quant_scale_idx > 0) {
+      quantizer.Configure(braids::scales[quant_scale_idx]);
+
+      for (int i = 0; i < MAX_VOICES; i++) {
+        if (voices[i].active) {
+          int32_t p = voices[i].pitch;
+          voices[i].pitch = quantizer.Process(p);
+        }
+      }
+    }
+    quantizer_dirty = false;
+  }
 
   static float smoothT = 0.5f;
   static float smoothC = 0.5f;
@@ -1414,9 +1795,24 @@ void loop1() {
             env_attack_s = constrain(env_attack_s + step * 0.01f, 0.001f, 1.f);
             env_params_changed = true;
             break;
+          case DECAY_ADJUST:
+            env_decay_s = constrain(env_decay_s + step * 0.01f, 0.001f, 2.f);
+            env_params_changed = true;
+            break;
           case RELEASE_ADJUST:
             env_release_s = constrain(env_release_s + step * 0.01f, 0.01f, 2.f);
             env_params_changed = true;
+            break;
+
+          case QNTZ:
+            {
+              int32_t prev_scale = quant_scale_idx;
+              quant_scale_idx = constrain(quant_scale_idx + step, 0, (int)kNumScales - 1);
+
+              if (quant_scale_idx != prev_scale) {
+                quantizer_dirty = true;  
+              }
+            }
             break;
 
           case ARP_TOGGLE:
@@ -1455,7 +1851,7 @@ void loop1() {
 
           case ARP_OCTAVE:
             arp.octaves = constrain(arp.octaves + step, 1, 4);
-            arp.updateSort();
+            arp.rebuild();
             break;
 
           case ARP_LATCH:
@@ -1463,7 +1859,7 @@ void loop1() {
             if (!arp.latch_enabled) {
               arp.clear();
               for (int i = 0; i < MAX_VOICES; i++) {
-                voices[i].active = false;
+                voices[i].stage = RELEASE;
                 voices[i].sustained = false;
               }
               arp.lastPitchCount = 0;
