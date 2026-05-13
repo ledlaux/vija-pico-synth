@@ -1560,7 +1560,7 @@ void loop1() {
               quant_scale_idx = constrain(quant_scale_idx + step, 0, (int)kNumScales - 1);
 
               if (quant_scale_idx != prev_scale) {
-                quantizer_dirty = true;  // ✅ mark dirty
+                quantizer_dirty = true;  
               }
             }
             break;
