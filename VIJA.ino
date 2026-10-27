@@ -71,7 +71,7 @@
 
 #define I2S_DATA_PIN 9
 #define I2S_BCLK_PIN 10
-#define SAMPLE_RATE 32000
+#define SAMPLE_RATE 44100
 #define AUDIO_BLOCK 32
 #define MAX_VOICES 6
 
@@ -86,8 +86,8 @@
 #define ENCODER_CLK 8
 #define BUTTON_DEBOUNCE_MS 150
 #define LONG_PRESS_MS 1000
-// #define MENU_EXIT_TIMEOUT
-#define TIMEOUT_MS 30000
+#define MENU_EXIT_TIMEOUT 10000
+#define TIMEOUT_MS 20000
 
 #define USE_UART_MIDI 0  // 0 = USB MIDI, 1 = UART MIDI
 #define MIDI_UART_RX 1
@@ -303,6 +303,8 @@ volatile int displayColor = 0;
 
 volatile bool system_ready = false;
 
+volatile bool editing_parameter = false;
+
 // For UI updates
 float pot_timbre = 0.5f;
 float pot_color = 0.5f;
@@ -315,6 +317,7 @@ static int lBtn = HIGH;
 
 volatile float scope_buffer[SCOPE_WIDTH];
 volatile bool scope_ready = false;
+
 
 
 Voice voices[MAX_VOICES];
@@ -804,7 +807,7 @@ void drawSplash() {
   display.getTextBounds(subtitle, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 40);
   display.println(subtitle);
-  const char *version = "v1.0.3";
+  const char *version = "v1.0.4";
   display.getTextBounds(version, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 54);
   display.println(version);
@@ -1543,105 +1546,108 @@ void loop1() {
         break;
 
       case SETTINGS_MODE:
-        switch (enc_state) {
-          case VOLUME_ADJUST: master_volume = constrain(master_volume + step * 0.01f, 0.f, 1.f); break;
-          case ATTACK_ADJUST:
-            env_attack_s = constrain(env_attack_s + step * 0.01f, 0.001f, 1.f);
-            env_params_changed = true;
-            break;
-          case RELEASE_ADJUST:
-            env_release_s = constrain(env_release_s + step * 0.01f, 0.01f, 2.f);
-            env_params_changed = true;
-            break;
-
-          case QNTZ:
-            {
-              int32_t prev_scale = quant_scale_idx;
-              quant_scale_idx = constrain(quant_scale_idx + step, 0, (int)kNumScales - 1);
-
-              if (quant_scale_idx != prev_scale) {
-                quantizer_dirty = true;  
-              }
-            }
-            break;
-
-          case ARP_TOGGLE:
-            arp.enabled = !arp.enabled;
-            if (!arp.enabled) {
-              arp.clear();
-              for (int i = 0; i < MAX_VOICES; i++) {
-                voices[i].active = false;
-                voices[i].env = 0.0f;
-              }
-              arp.lastPitchCount = 0;
-            }
-            break;
-
-          case ARP_MODE:
-            {
-              int nextMode = (int)arp.mode + 1;
-              if (nextMode > 4) nextMode = 0;
-              arp.mode = (ArpDirection)nextMode;
+        if (!editing_parameter) {
+          // Browsing menu items
+          int current_state = (int)enc_state;
+          current_state += step;
+          if (current_state > SCOPE_TOGGLE) current_state = VOLUME_ADJUST;
+          if (current_state < VOLUME_ADJUST) current_state = SCOPE_TOGGLE;
+          enc_state = (EncoderState)current_state;
+        } else {
+          // Editing the active parameter value
+          switch (enc_state) {
+            case VOLUME_ADJUST: master_volume = constrain(master_volume + step * 0.01f, 0.f, 1.f); break;
+            case ATTACK_ADJUST:
+              env_attack_s = constrain(env_attack_s + step * 0.01f, 0.001f, 1.f);
+              env_params_changed = true;
               break;
-            }
+            case RELEASE_ADJUST:
+              env_release_s = constrain(env_release_s + step * 0.01f, 0.01f, 2.f);
+              env_params_changed = true;
+              break;
 
-          case ARP_DIV:
-            {
-              int currentIdx = 0;
-              for (int i = 0; i < NUM_DIVS; i++) {
-                if (arp.division == arpDivTable[i]) {
-                  currentIdx = i;
-                  break;
+            case QNTZ:
+              {
+                int32_t prev_scale = quant_scale_idx;
+                quant_scale_idx = constrain(quant_scale_idx + step, 0, (int)kNumScales - 1);
+                if (quant_scale_idx != prev_scale) quantizer_dirty = true;
+              }
+              break;
+
+            case ARP_TOGGLE:
+              arp.enabled = !arp.enabled;
+              if (!arp.enabled) {
+                arp.clear();
+                for (int i = 0; i < MAX_VOICES; i++) {
+                  voices[i].active = false;
+                  voices[i].env = 0.0f;
                 }
+                arp.lastPitchCount = 0;
               }
-              int nextIdx = constrain(currentIdx + step, 0, NUM_DIVS - 1);
-              arp.division = arpDivTable[nextIdx];
               break;
-            }
 
-          case ARP_OCTAVE:
-            arp.octaves = constrain(arp.octaves + step, 1, 4);
-            arp.rebuild();
-            break;
-
-          case ARP_LATCH:
-            arp.latch_enabled = !arp.latch_enabled;
-            if (!arp.latch_enabled) {
-              arp.clear();
-              for (int i = 0; i < MAX_VOICES; i++) {
-                voices[i].active = false;
-                voices[i].sustained = false;
+            case ARP_MODE:
+              {
+                int nextMode = (int)arp.mode + 1;
+                if (nextMode > 4) nextMode = 0;
+                arp.mode = (ArpDirection)nextMode;
               }
-              arp.lastPitchCount = 0;
-            }
-            break;
+              break;
 
-          case FILTER_TOGGLE:
-            filter_enabled = !filter_enabled;
-            midi_mod = cv_mod1 = cv_mod2 = false;
-            break;
-          case MIDI_MOD:
-            midi_mod = !midi_mod;
-            if (midi_mod) cv_mod1 = cv_mod2 = false;
-            break;
-          case CV_MOD1:
-            cv_mod1 = !cv_mod1;
-            filter_enabled = cv_mod2 = midi_mod = false;
-            break;
-          case CV_MOD2:
-            cv_mod2 = !cv_mod2;
-            cv_mod1 = filter_enabled = midi_mod = false;
-            break;
-          case MIDI_CH:
-            midi_ch = constrain(midi_ch + step, 1, 16);
-            break;
-          case SCOPE_TOGGLE:
-            oscilloscope_enabled = !oscilloscope_enabled;
-            if (!oscilloscope_enabled && display_mode == OSCILLOSCOPE_MODE) display_mode = ENGINE_SELECT_MODE;
-            break;
-          default:
-            display_mode = ENGINE_SELECT_MODE;
-            break;
+            case ARP_DIV:
+              {
+                int currentIdx = 0;
+                for (int i = 0; i < NUM_DIVS; i++) {
+                  if (arp.division == arpDivTable[i]) { currentIdx = i; break; }
+                }
+                int nextIdx = constrain(currentIdx + step, 0, NUM_DIVS - 1);
+                arp.division = arpDivTable[nextIdx];
+              }
+              break;
+
+            case ARP_OCTAVE:
+              arp.octaves = constrain(arp.octaves + step, 1, 4);
+              arp.rebuild();
+              break;
+
+            case ARP_LATCH:
+              arp.latch_enabled = !arp.latch_enabled;
+              if (!arp.latch_enabled) {
+                arp.clear();
+                for (int i = 0; i < MAX_VOICES; i++) {
+                  voices[i].active = false;
+                  voices[i].sustained = false;
+                }
+                arp.lastPitchCount = 0;
+              }
+              break;
+
+            case FILTER_TOGGLE:
+              filter_enabled = !filter_enabled;
+              midi_mod = cv_mod1 = cv_mod2 = false;
+              break;
+            case MIDI_MOD:
+              midi_mod = !midi_mod;
+              if (midi_mod) cv_mod1 = cv_mod2 = false;
+              break;
+            case CV_MOD1:
+              cv_mod1 = !cv_mod1;
+              filter_enabled = cv_mod2 = midi_mod = false;
+              break;
+            case CV_MOD2:
+              cv_mod2 = !cv_mod2;
+              cv_mod1 = filter_enabled = midi_mod = false;
+              break;
+            case MIDI_CH:
+              midi_ch = constrain(midi_ch + step, 1, 16);
+              break;
+            case SCOPE_TOGGLE:
+              oscilloscope_enabled = !oscilloscope_enabled;
+              if (!oscilloscope_enabled && display_mode == OSCILLOSCOPE_MODE) display_mode = ENGINE_SELECT_MODE;
+              break;
+            default:
+              break;
+          }
         }
         engine_updated = true;
         break;
@@ -1655,84 +1661,84 @@ void loop1() {
   lClk = clk;
 
   // --- 5. BUTTON ---
+
   int btn = digitalRead(ENCODER_SW);
   unsigned long now = millis();
 
-  if (btn == LOW && lBtn == HIGH && (now - last_btn_time > BUTTON_DEBOUNCE_MS)) {
-    btnDownTime = now;
-    btnIsDown = true;
-    longPressExecuted = false;
-    saveExecuted = false;
+  static bool btn_was_down = false;
+  static unsigned long press_start_time = 0;
+  static int click_count = 0;
+  static unsigned long click_timer = 0;
+  static bool long_press_handled = false;
+
+  // 1. Enter MENU
+  if (btn == LOW && !btn_was_down && (now - last_btn_time > BUTTON_DEBOUNCE_MS)) {
+    btn_was_down = true;
+    press_start_time = now;
+    long_press_handled = false;
     last_btn_time = now;
   }
 
-  if (btn == LOW && btnIsDown) {
-    unsigned long holdDuration = now - btnDownTime;
-
-    // 1000ms: LONG PRESS SAVE
-    if (holdDuration >= LONG_PRESS_MS && !saveExecuted) {
+  // 2. SAVE Settings
+  if (btn == LOW && btn_was_down && display_mode == SETTINGS_MODE) {
+    unsigned long holdDuration = now - press_start_time;
+    if (!long_press_handled && holdDuration >= LONG_PRESS_MS) {
       saveSettings();
-      saveExecuted = true;
-      longPressExecuted = true;
-    }
-
-    else if (holdDuration >= BUTTON_DEBOUNCE_MS && (display_mode == ENGINE_SELECT_MODE || display_mode == OSCILLOSCOPE_MODE)) {
-      display_mode = SETTINGS_MODE;
-      enc_state = ENGINE_SELECT;
-      engine_updated = true;
-      last_draw_time = 0;
-      drawEngineUI();
-      display.display();
-
-      last_encoder_activity = now;
+      long_press_handled = true;
+      click_count = 0;
     }
   }
 
-  if (btn == HIGH && lBtn == LOW) {
-    btnIsDown = false;
+  // 3. Released
+  if (btn == HIGH && btn_was_down) {
+    btn_was_down = false;
     last_btn_time = now;
 
-    if (!longPressExecuted) {
-      if (!click_pending) {
-        click_pending = true;
-        last_click_time = now;
+    if (!long_press_handled) {
+      if (display_mode == ENGINE_SELECT_MODE || display_mode == OSCILLOSCOPE_MODE) {
+        display_mode = SETTINGS_MODE;
+        enc_state = VOLUME_ADJUST;
+        editing_parameter = false;
+        engine_updated = true;
+        last_encoder_activity = now;
+        last_draw_time = 0;
+      }
+
+      else if (display_mode == SETTINGS_MODE) {
+        if (click_count == 1 && (now - click_timer < 400)) {
+          // Doeble Click: Exit MENU
+          display_mode = ENGINE_SELECT_MODE;
+          enc_state = ENGINE_SELECT;
+          editing_parameter = false;
+          click_count = 0;
+          engine_updated = true;
+          last_encoder_activity = now;
+          last_draw_time = 0;
+        } else {
+          // First Click
+          click_count = 1;
+          click_timer = now;
+        }
       }
     }
+  }
+
+  // 4. Single Click Timeout: Toggle parameter editing
+  if (click_count == 1 && (now - click_timer > 400)) {
+    if (display_mode == SETTINGS_MODE) {
+      editing_parameter = !editing_parameter;
+    }
+
+    click_count = 0;
     engine_updated = true;
     last_draw_time = 0;
   }
-  lBtn = btn;
 
-  if (click_pending) {
-    unsigned long waitTime = now - last_click_time;
+// --- 6. SCREEN REFRESH ---
 
-    if (btn == LOW && waitTime > 100 && waitTime < 600) {
-      if (display_mode == SETTINGS_MODE) {
-        display_mode = ENGINE_SELECT_MODE;
-        enc_state = ENGINE_SELECT;
-        last_encoder_activity = now;
-        click_pending = false;
-        longPressExecuted = true;
-      }
-    } else if (waitTime > 300 && btn == HIGH) {
-      if (display_mode == SETTINGS_MODE) {
-        if (enc_state >= SCOPE_TOGGLE) {
-          enc_state = VOLUME_ADJUST;
-        } else {
-          enc_state = (EncoderState)(enc_state + 1);
-        }
-
-        last_encoder_activity = now;
-      }
-      click_pending = false;
-      engine_updated = true;
-      last_draw_time = 0;
-    }
-  }
-
-  // --- 6. SCREEN REFRESH ---
 #if USE_SCREEN
   static int last_engine_draw = -1;
+  static int last_display_mode = -1;
   static unsigned long last_draw_time = 0;
 
   if (millis() - last_draw_time > 60) {
@@ -1743,28 +1749,38 @@ void loop1() {
     if (display_mode == SETTINGS_MODE && idle > TIMEOUT_MS) {
       display_mode = ENGINE_SELECT_MODE;
       enc_state = ENGINE_SELECT;
+      editing_parameter = false;
       engine_updated = true;
+      last_encoder_activity = millis();  // Restart idle timer
     } else
 #endif
 
-      if (display_mode == ENGINE_SELECT_MODE && idle > 10000 && oscilloscope_enabled) {
+    if (display_mode == ENGINE_SELECT_MODE && idle > 10000 && oscilloscope_enabled) {
       display_mode = OSCILLOSCOPE_MODE;
       engine_updated = true;
     }
 
-    switch (display_mode) {
-      case OSCILLOSCOPE_MODE: drawScope(); break;
-      case ENGINE_SELECT_MODE:
-      case SETTINGS_MODE:
-        if (engine_updated || engine_idx != last_engine_draw) {
-          drawEngineUI();
-          last_engine_draw = engine_idx;
-          engine_updated = false;
-        }
-        break;
+    // Detect switch between modes 
+    bool mode_changed = (display_mode != last_display_mode);
+    if (mode_changed) {
+      last_display_mode = display_mode;
+      engine_updated = true;
+    }
+
+    if (display_mode == OSCILLOSCOPE_MODE) {
+      drawScope();
+    } 
+    else {
+      // Redraw if engine changed, parameter updated, or we just switched modes
+      if (engine_updated || engine_idx != last_engine_draw || mode_changed) {
+        display.clearDisplay(); 
+        drawEngineUI();
+        display.display();      
+        last_engine_draw = engine_idx;
+        engine_updated = false;
+      }
     }
   }
 #endif
 
-  yield();
 }
