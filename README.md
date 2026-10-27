@@ -20,7 +20,7 @@ in semi-modular format.
 
 <img src="https://raw.githubusercontent.com/dlyline/vija-pico-synth_UART-MIDI_FLIPPED-OLED/main/IMG_20260803_125919.jpg" width="400" alt="VIJA Pico Synth">
 
-Example of very neat hardware build by [dlyline](https://github.com/dlyline/vija-pico-synth_UART-MIDI_FLIPPED-OLED/tree/main). 
+Example of very neat hardware build done by [dlyline](https://github.com/dlyline/vija-pico-synth_UART-MIDI_FLIPPED-OLED/tree/main). 
 
 ## 🕹 Menu System & UI
 
@@ -178,7 +178,7 @@ Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP1**.
   
 ---
 ##  Version history
-* 2026-10-27 - v1.0.4 (+ quantizer)
+* 2026-10-   - v1.0.4 (+ quantizer)
 * 2026-04-18 - v1.0.3 (+ arpeggiator)
 * 2026-02-26 - v1.0.2 
 * 2026-02-03 - v1.0.1  
