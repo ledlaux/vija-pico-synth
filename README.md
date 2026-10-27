@@ -7,28 +7,36 @@ in semi-modular format.
 
 ## 🚀 Features
 
-* **40+ Oscillator Engines:** Includes VA, FM, Additive, Wavetable, Physical Modeling and Drums.
-* **Polyphony:** Per-sample AR (Attack-Release) envelopes.
-* **OLED Interface:** Real-time feedback with a menu system and a oscilloscope.
-* **Modulation:** 2 pots, CV input and MIDI CC.
-* **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance.
-* **MIDI:** Support for both USB MIDI and classic UART MIDI.
-* **Quantizer:** MIDI note quantization according to the selected scale.
-* **Arpeggiator:** Different modes, divisions and MIDI sync.
+* **40+ Oscillator Engines:** Includes VA, FM, Additive, Wavetable, Physical Modeling and Drums
+* **Polyphony:** Per-sample AR (Attack-Release) envelopes
+* **OLED Interface:** Real-time feedback with a menu system and a oscilloscope
+* **Modulation:** 2 pots, CV input and MIDI CC
+* **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance
+* **MIDI:** Support for both USB MIDI and classic UART MIDI
+* **Quantizer:** MIDI note quantization according to the selected scale
+* **Arpeggiator:** Different modes, divisions and MIDI sync
 ---
+
+
+<img src="https://raw.githubusercontent.com/dlyline/vija-pico-synth_UART-MIDI_FLIPPED-OLED/main/IMG_20260803_125919.jpg" width="400" alt="VIJA Pico Synth">
+
+Example of very neat hardware build by [dlyline](https://github.com/dlyline/vija-pico-synth_UART-MIDI_FLIPPED-OLED/tree/main). 
 
 ## 🕹 Menu System & UI
 
-The enter synthesizer SETTINGS menu click encoder button. Then:
-   -  Rotate to cycle through parameters
-   -  Click to select parameter and return to the menu
-   -  Double click to exit menu
-   -  Long press to save menu settings and last used engine
-     
+The synthesizer operates in three primary display modes:
+
 **DISPLAY MODES:**
 1. **ENGINE SELECT:** Rotate the encoder to scroll through engines  
 
 2. **SETTINGS:**
+
+   To enter click encoder button
+   Rotate to cycle through parameters     
+   Click to select parameter and return to the menu   
+   Long press to save menu settings and last used engine  
+   Double click to exit menu or automatic exit after timeout   
+     
    * **VOLUME:** Global gain control  
    * **A/R ENVELOPES:** Adjust the "snappiness" (Attack) or "fade" (Release) of notes  
    * **QUANTIZER**: Select scale to adjust MIDI note pitch quantization 
