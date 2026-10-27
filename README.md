@@ -19,11 +19,16 @@ in semi-modular format.
 
 ## 🕹 Menu System & UI
 
-The synthesizer operates in three primary display modes:
-
+The enter synthesizer SETTINGS menu click encoder button. Then:
+   -  Rotate to cycle through parameters
+   -  Click to select parameter and return to the menu
+   -  Double click to exit menu
+   -  Long press to save menu settings and last used engine
+     
+**DISPLAY MODES:**
 1. **ENGINE SELECT:** Rotate the encoder to scroll through engines  
 
-2. **SETTINGS:** Click the encoder button to cycle through parameters  
+2. **SETTINGS:**
    * **VOLUME:** Global gain control  
    * **A/R ENVELOPES:** Adjust the "snappiness" (Attack) or "fade" (Release) of notes  
    * **QUANTIZER**: Select scale to adjust MIDI note pitch quantization 
@@ -38,9 +43,8 @@ The synthesizer operates in three primary display modes:
    * **MIDI:** Enable MIDI CC and disable CV  
    * **MIDI CH:** Set the input channel (1–16)  
    * **OSCILLOSCOPE:** Toggle On / Off  
-   * **SAVE:** Long press to save menu settings and last used engine 
-   * **EXIT MENU:**  Double click 
-3. **OSCILLOSCOPE:** Automatically engages after 10 seconds to visualize the current waveform  
+4. **OSCILLOSCOPE:** Automatically engages after 15 seconds to visualize the current waveform
+   
 ### Filter Mode (Default)
 
 - Timbre & Color (default)  
@@ -166,7 +170,7 @@ Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP1**.
   
 ---
 ##  Version history
-* 2026-04--- - v1.0.4 (+ quantizer)
+* 2026-10-27 - v1.0.4 (+ quantizer)
 * 2026-04-18 - v1.0.3 (+ arpeggiator)
 * 2026-02-26 - v1.0.2 
 * 2026-02-03 - v1.0.1  
