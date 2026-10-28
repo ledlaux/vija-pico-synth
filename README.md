@@ -48,8 +48,9 @@ The synthesizer operates in three primary display modes:
      - **LATCH:** Hold notes after release  
    * **FILTER:** Enable/Disable the Filter  
    * **CV:** CV modulation mode  
-   * **MIDI:** Enable MIDI CC and disable CV  
-   * **MIDI CH:** Set the input channel (1–16)  
+   * **MIDI:** Enable MIDI CC and disable CV
+   * **MIDI INPUT:** UART, USB, BOTH (default) or OFF
+   * **MIDI CH:** 1–16
    * **OSCILLOSCOPE:** Toggle On / Off  
 4. **OSCILLOSCOPE:** Automatically engages after 15 seconds to visualize the current waveform
    
