@@ -179,7 +179,7 @@ Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP1**.
   
 ---
 ##  Version history
-* 2026-10-   - v1.0.4 (+ quantizer)
+* 2026-10-28   - v1.0.4 (+ quantizer)
 * 2026-04-18 - v1.0.3 (+ arpeggiator)
 * 2026-02-26 - v1.0.2 
 * 2026-02-03 - v1.0.1  
