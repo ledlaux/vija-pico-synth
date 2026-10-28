@@ -7,43 +7,53 @@ in semi-modular format.
 
 ## 🚀 Features
 
-* **40+ Oscillator Engines:** Includes VA, FM, Additive, Wavetable, Physical Modeling and Drums.
-* **Polyphony:** Per-sample AR (Attack-Release) envelopes.
-* **OLED Interface:** Real-time feedback with a menu system and a oscilloscope.
-* **Modulation:** 2 pots, CV input and MIDI CC.
-* **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance.
-* **MIDI:** Support for both USB MIDI and classic UART MIDI.
-* **Arpeggiator** with MIDI sync.
-
+* **40+ Oscillator Engines:** Includes VA, FM, Additive, Wavetable, Physical Modeling and Drums
+* **Polyphony:** Per-sample AR (Attack-Release) envelopes
+* **OLED Interface:** Real-time feedback with a menu system and a oscilloscope
+* **Modulation:** 2 pots, CV input and MIDI CC
+* **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance
+* **MIDI:** Support for UART and USB MIDI
+* **Quantizer:** MIDI note quantization according to the selected scale
+* **Arpeggiator:** Different modes, divisions and MIDI sync
 ---
+
+
+<img src="https://raw.githubusercontent.com/dlyline/vija-pico-synth_UART-MIDI_FLIPPED-OLED/main/IMG_20260803_125919.jpg" width="400" alt="VIJA Pico Synth">
+
+Example of very neat hardware build done by [dlyline](https://github.com/dlyline/vija-pico-synth_UART-MIDI_FLIPPED-OLED/tree/main). 
 
 ## 🕹 Menu System & UI
 
 The synthesizer operates in three primary display modes:
 
+**DISPLAY MODES:**
 1. **ENGINE SELECT:** Rotate the encoder to scroll through engines  
 
-2. **SETTINGS:** Click the encoder button to cycle through parameters  
+2. **SETTINGS:**
+
+   To enter click encoder button  
+   Rotate to cycle through parameters       
+   Click to select parameter and return to the menu   
+   Long press to save menu settings and last used engine  
+   Double click to exit menu or automatic exit after timeout   
+     
    * **VOLUME:** Global gain control  
    * **A/R ENVELOPES:** Adjust the "snappiness" (Attack) or "fade" (Release) of notes  
-   * **FILTER:** Enable/Disable the Filter  
-
+   * **QUANTIZER**: Select scale to adjust MIDI note pitch quantization 
    * **ARPEGGIATOR:**  
      - **ARP:** Enable/Disable 
      - **MODE:** UP / DOWN / UPDN / PLAY / RAND  
      - **DIV:** Note division (e.g. 1/4, 1/8, triplet, dotted)  
      - **OCT:** Octave range  
      - **LATCH:** Hold notes after release  
-
+   * **FILTER:** Enable/Disable the Filter  
    * **CV:** CV modulation mode  
-   * **MIDI:** Enable MIDI CC and disable CV  
-   * **MIDI CH:** Set the input channel (1–16)  
-
+   * **MIDI:** Enable MIDI CC and disable CV
+   * **MIDI INPUT:** UART, USB, BOTH (default) or OFF
+   * **MIDI CH:** 1–16
    * **OSCILLOSCOPE:** Toggle On / Off  
-   * **SAVE SETTINGS:** Long press to save menu settings  
-   * **EXIT MENU:**  Double click 
-
-3. **OSCILLOSCOPE:** Automatically engages after 10 seconds to visualize the current waveform  
+4. **OSCILLOSCOPE:** Automatically engages after 15 seconds to visualize the current waveform
+   
 ### Filter Mode (Default)
 
 - Timbre & Color (default)  
@@ -169,6 +179,7 @@ Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP1**.
   
 ---
 ##  Version history
+* 2026-10-28   - v1.0.4 (+ quantizer)
 * 2026-04-18 - v1.0.3 (+ arpeggiator)
 * 2026-02-26 - v1.0.2 
 * 2026-02-03 - v1.0.1  
