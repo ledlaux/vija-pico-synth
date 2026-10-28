@@ -9,16 +9,16 @@
   Features:
   - 40+ digital oscillator engines
   - Polyphonic, per-sample AR envelopes
-  - USB or UART MIDI input
+  - USB and UART MIDI input
   - Filter (SVF)
   - OLED display with menu system & oscilloscope
   - Synth controls via potentiometers, CV or MIDI CC
-  - Arpeggiator (MIDI sync)
   - MIDI note quantization according to the selected scale
+  - Arpeggiator (MIDI sync) with different modes
   
   Hardware:
-  - RP2040 or RP2350 board, I2S PCM5102 DAC, SSD1306 OLED, rotary encoder with button, 2 pots, 2 cv jacks or 2 more pots
-  - MIDI via USB or UART
+  - RP2040 or RP2350 board, I2S PCM5102 DAC, SSD1306 or SH110X OLED, rotary encoder with button, 2 pots, 2 cv jacks or 2 more pots
+  - MIDI via USB and UART
 
   For this project I use RP2040 Zero model, so adjust GPIO numbers to your board.
 
@@ -45,6 +45,7 @@
   MIT License
   
 */
+
 
 #include <Arduino.h>
 #include <I2S.h>
@@ -73,9 +74,8 @@
 #define I2S_BCLK_PIN 10
 #define SAMPLE_RATE 44100
 #define AUDIO_BLOCK 32
-#define MAX_VOICES 6
+#define MAX_VOICES 3
 
-#define USE_POTS 0
 #define POT_TIMBRE A0      // GPIO26
 #define POT_COLOR A2       // GPIO27
 #define POT_TIMBRE_MOD A1  // GPIO28
@@ -87,9 +87,8 @@
 #define BUTTON_DEBOUNCE_MS 150
 #define LONG_PRESS_MS 1000
 #define MENU_EXIT_TIMEOUT 10000
-#define TIMEOUT_MS 20000
+#define TIMEOUT_MS 15000
 
-#define USE_UART_MIDI 0  // 0 = USB MIDI, 1 = UART MIDI
 #define MIDI_UART_RX 1
 
 #define USE_SCREEN 1
@@ -121,6 +120,8 @@ enum DisplayMode { ENGINE_SELECT_MODE,
                    SETTINGS_MODE,
                    OSCILLOSCOPE_MODE };
 
+enum MidiInputMode : uint8_t { MIDI_INPUT_UART = 0, MIDI_INPUT_USB = 1, MIDI_INPUT_BOTH = 2, MIDI_INPUT_OFF = 3 };
+
 enum EncoderState { ENGINE_SELECT,
                     VOLUME_ADJUST,
                     ATTACK_ADJUST,
@@ -135,6 +136,7 @@ enum EncoderState { ENGINE_SELECT,
                     MIDI_MOD,
                     CV_MOD1,
                     CV_MOD2,
+                    MIDI_INPUT,
                     MIDI_CH,
                     SCOPE_TOGGLE };
 
@@ -214,6 +216,7 @@ struct SynthSettings {
   float timb_mod_cv;
   float color_mod_cv;
   uint8_t midi_ch;
+  uint8_t midi_input_mode;
   EncoderState enc_state;
   bool oscilloscope_enabled;
   ArpSettings arp_set;
@@ -234,6 +237,7 @@ SynthSettings settings = {
   .timb_mod_cv = 0.0f,
   .color_mod_cv = 0.0f,
   .midi_ch = 1,
+  .midi_input_mode = MIDI_INPUT_BOTH,
   .enc_state = ENGINE_SELECT,
   .oscilloscope_enabled = true,
   .arp_set = {
@@ -245,6 +249,7 @@ SynthSettings settings = {
 };
 
 volatile uint8_t midi_ch = 1;
+volatile uint8_t midi_input_mode = MIDI_INPUT_BOTH;
 volatile int engine_idx = 1;
 static int last_engine_idx = -1;
 volatile float timbre_in = 0.4f;
@@ -291,7 +296,7 @@ volatile bool oscilloscope_enabled = true;
 volatile float scope_buffer_front[SCOPE_WIDTH];
 volatile float scope_buffer_back[SCOPE_WIDTH];
 
-const unsigned long AUTO_REVERT_MS = 4000;
+//const unsigned long AUTO_REVERT_MS = 4000;
 volatile unsigned long last_encoder_activity = 0;
 volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
 volatile EncoderState enc_state = ENGINE_SELECT;
@@ -302,7 +307,6 @@ volatile int displayTimbre = 0;
 volatile int displayColor = 0;
 
 volatile bool system_ready = false;
-
 volatile bool editing_parameter = false;
 
 // For UI updates
@@ -317,7 +321,6 @@ static int lBtn = HIGH;
 
 volatile float scope_buffer[SCOPE_WIDTH];
 volatile bool scope_ready = false;
-
 
 
 Voice voices[MAX_VOICES];
@@ -757,6 +760,12 @@ void drawEngineUI() {
       sprintf(menuBuf, "MIDICH:%d", midi_ch);
       engine_updated = true;
       break;
+    case MIDI_INPUT: {
+      const char *inputNames[] = { "UART", "USB", "BOTH", "OFF" };
+      uint8_t mode = (midi_input_mode <= MIDI_INPUT_OFF) ? midi_input_mode : MIDI_INPUT_BOTH;
+      sprintf(menuBuf, "INPUT:%s", inputNames[mode]);
+      break;
+    }
     case SCOPE_TOGGLE: sprintf(menuBuf, "SCOPE:%s", oscilloscope_enabled ? "ON" : "OFF"); break;
     default:
       if (timbre_locked && color_locked) strcpy(menuBuf, "ALL-MIDI");
@@ -906,74 +915,113 @@ void __not_in_flash_func(advanceArp)() {
 }
 
 
-void __not_in_flash_func(handleMIDI)() {
+// MIDI event ring buffer. UART and USB are polled independently, then
+// complete MIDI messages are dispatched from this queue in bounded batches.
+
+struct MidiEvent {
+  uint8_t status;
+  uint8_t data1;
+  uint8_t data2;
+};
+
+static constexpr uint8_t MIDI_QUEUE_SIZE = 32; 
+static MidiEvent midiQueue[MIDI_QUEUE_SIZE];
+static volatile uint8_t midiQueueHead = 0;
+static volatile uint8_t midiQueueTail = 0;
+static uint32_t midiQueueDrops = 0;
+
+static inline bool midiQueuePush(uint8_t status, uint8_t d1, uint8_t d2) {
+  uint8_t head = midiQueueHead;
+  uint8_t next = (uint8_t)((head + 1u) & (MIDI_QUEUE_SIZE - 1u));
+  if (next == midiQueueTail) {
+    ++midiQueueDrops;
+    return false;
+  }
+  midiQueue[head] = { status, (uint8_t)(d1 & 0x7F), (uint8_t)(d2 & 0x7F) };
+  midiQueueHead = next;
+  return true;
+}
+
+static inline bool midiQueuePop(uint8_t &status, uint8_t &d1, uint8_t &d2) {
+  uint8_t tail = midiQueueTail;
+  if (tail == midiQueueHead) return false;
+  status = midiQueue[tail].status;
+  d1 = midiQueue[tail].data1;
+  d2 = midiQueue[tail].data2;
+  midiQueueTail = (uint8_t)((tail + 1u) & (MIDI_QUEUE_SIZE - 1u));
+  return true;
+}
+
+static inline void handleMidiRealtime(uint8_t byte) {
+  if (byte == 0xF8 && arp.enabled) {
+    arp.tickCounter++;
+    if (arp.tickCounter >= arp.division) {
+      arp.tickCounter = 0;
+      advanceArp();
+    }
+  } else if (byte == 0xFA || byte == 0xFB) {
+    arp.tickCounter = arp.division;
+    arp.currentStep = -1;
+  } else if (byte == 0xFC) {
+    arp.tickCounter = 0;
+  }
+}
+
+static inline void queueUartMidiByte(uint8_t byte) {
   static uint8_t running_status = 0;
-  static uint8_t data_bytes[2] = { 0 };
+  static uint8_t data_bytes[2] = { 0, 0 };
   static uint8_t data_idx = 0;
 
-  uint8_t status = 0, d1 = 0, d2 = 0;
-  bool has_msg = false;
-
-  // --- 1. MIDI SOURCE HANDLING ---
-#if USE_UART_MIDI
-  if (Serial1.available() > 0) {
-    uint8_t byte = Serial1.read();
-    if (byte >= 0xF8) {
-      if (byte == 0xF8 && arp.enabled) {  // Clock
-        arp.tickCounter++;
-        if (arp.tickCounter >= arp.division) {
-          arp.tickCounter = 0;
-          advanceArp();
-        }
-      } else if (byte == 0xFA || byte == 0xFB) {  // Start/Continue
-        arp.tickCounter = arp.division;
-        arp.currentStep = -1;
-      }
-      return;
-    }
-    if (byte & 0x80) {
-      running_status = byte;
+  // Realtime bytes can be interleaved with channel messages.
+  if (byte >= 0xF8) {
+    handleMidiRealtime(byte);
+    return;
+  }
+  if (byte & 0x80) {
+    if (byte >= 0xF0) { // Ignore unsupported system-common messages.
+      running_status = 0;
       data_idx = 0;
-    } else if (running_status != 0) {
-      if (data_idx < 2) data_bytes[data_idx++] = byte;
-      uint8_t type = running_status & 0xF0;
-      uint8_t len = (type == 0xC0 || type == 0xD0) ? 1 : 2;
-      if (data_idx == len) {
-        status = running_status;
-        d1 = data_bytes[0];
-        d2 = (len == 2) ? data_bytes[1] : 0;
-        data_idx = 0;
-        has_msg = true;
-      }
-    }
-  }
-#endif
-
-  uint8_t packet[4];
-  if (!has_msg && usb_midi.readPacket(packet)) {
-    uint8_t cin = packet[0] & 0x0F;
-    if (cin == 0xF) {  // Real-time
-      if (packet[1] == 0xF8 && arp.enabled) {
-        arp.tickCounter++;
-        if (arp.tickCounter >= arp.division) {
-          arp.tickCounter = 0;
-          advanceArp();
-        }
-      } else if (packet[1] == 0xFA || packet[1] == 0xFB) {
-        arp.tickCounter = arp.division;
-        arp.currentStep = -1;
-      }
       return;
     }
-    if (cin >= 0x8 && cin <= 0xE) {
-      status = packet[1];
-      d1 = packet[2];
-      d2 = packet[3];
-      has_msg = true;
+    running_status = byte;
+    data_idx = 0;
+    return;
+  }
+  if (!running_status) return;
+
+  if (data_idx < 2) data_bytes[data_idx++] = byte & 0x7F;
+  uint8_t type = running_status & 0xF0;
+  uint8_t length = (type == 0xC0 || type == 0xD0) ? 1 : 2;
+  if (data_idx >= length) {
+    midiQueuePush(running_status, data_bytes[0], length == 2 ? data_bytes[1] : 0);
+    data_idx = 0;
+  }
+}
+
+static inline void pollUartMidi() {
+  if (midi_input_mode != MIDI_INPUT_UART && midi_input_mode != MIDI_INPUT_BOTH) return;
+  uint8_t budget = 24; // bound UART work per audio-loop pass
+  while (budget-- && Serial1.available() > 0) {
+    queueUartMidiByte((uint8_t)Serial1.read());
+  }
+}
+
+static inline void pollUsbMidi() {
+  if (midi_input_mode != MIDI_INPUT_USB && midi_input_mode != MIDI_INPUT_BOTH) return;
+  uint8_t packet[4];
+  uint8_t budget = 8; // bound USB work per audio-loop pass
+  while (budget-- && usb_midi.readPacket(packet)) {
+    uint8_t cin = packet[0] & 0x0F;
+    if (cin == 0x0F) {
+      handleMidiRealtime(packet[1]);
+    } else if (cin >= 0x08 && cin <= 0x0E) {
+      midiQueuePush(packet[1], packet[2], packet[3]);
     }
   }
+}
 
-  if (!has_msg || (status & 0x0F) != (midi_ch - 1)) return;
+void __not_in_flash_func(processMIDIMessage)(uint8_t status, uint8_t d1, uint8_t d2) {
+  if ((status & 0x0F) != (midi_ch - 1)) return;
   uint8_t msgType = status & 0xF0;
 
   // --- 2. CC HANDLING ---
@@ -1027,7 +1075,7 @@ void __not_in_flash_func(handleMIDI)() {
       }
     } else {
 
-      int i = findVoiceByPitch(d1);  // <-- IMPORTANT CHANGE
+      int i = findVoiceByPitch(d1);  
 
       if (i >= 0) {
         if (sustain_enabled) {
@@ -1038,15 +1086,40 @@ void __not_in_flash_func(handleMIDI)() {
       }
     }
 
-  } else if (msgType == 0x90) {  // Note On
+// QUANTIZATION modes: 
 
-    // 1. Convert MIDI note to Braids pitch units
-    int32_t quantized_pitch = (int32_t)d1 << 7;
+// 1: Snapping to the nearest scale note 
+// 2: reject notes which are not in scale
 
-    // 2. Apply Quantization if a scale is selected
-    if (quant_scale_idx > 0) {
-      quantized_pitch = quantizer.Process(quantized_pitch);
-    }
+
+  // } else if (msgType == 0x90) {  // Note On
+
+  //   // 1. Convert MIDI note to Braids pitch units
+  //   int32_t quantized_pitch = (int32_t)d1 << 7;
+
+  //   // 2. Apply Quantization if a scale is selected
+  //   if (quant_scale_idx > 0) {
+  //     quantized_pitch = quantizer.Process(quantized_pitch);
+  //   }
+
+
+    } else if (msgType == 0x90 && d2 > 0) {  // Note On
+
+        // Convert MIDI note to Braids pitch units
+        int32_t quantized_pitch = (int32_t)d1 << 7;
+
+        // Reject notes outside the selected scale
+        if (quant_scale_idx > 0) {
+            int32_t scale_pitch = quantizer.Process(quantized_pitch);
+
+            if (scale_pitch != quantized_pitch) {
+                return;  // Out-of-scale note: ignore it
+            }
+
+            quantized_pitch = scale_pitch;
+        }
+
+  
 
     if (arp.enabled) {
       if (arp.latch_enabled && arp.physicalKeys == 0) {
@@ -1078,6 +1151,18 @@ void __not_in_flash_func(handleMIDI)() {
   }
 }
 
+void __not_in_flash_func(handleMIDI)() {
+  // Always poll both transports when BOTH is selected; the queue merges them.
+  pollUartMidi();
+  pollUsbMidi();
+
+  uint8_t status, d1, d2;
+  uint8_t budget = 16; // bounded dispatch keeps MIDI bursts from monopolizing audio
+  while (budget-- && midiQueuePop(status, d1, d2)) {
+    processMIDIMessage(status, d1, d2);
+  }
+}
+
 
 // Saving settings
 void saveSettings() {
@@ -1102,6 +1187,7 @@ void saveSettings() {
   doc["tcv"] = settings.timb_mod_cv;
   doc["mcv"] = settings.color_mod_cv;
   doc["ch"] = settings.midi_ch;
+  doc["midi_in"] = settings.midi_input_mode;
   doc["enc"] = (int)settings.enc_state;
   doc["osc"] = settings.oscilloscope_enabled;
   doc["arp_on"] = settings.arp_set.enabled;
@@ -1146,6 +1232,8 @@ void loadSettings() {
   settings.timb_mod_cv = doc["tcv"] | 0.0f;
   settings.color_mod_cv = doc["mcv"] | 0.0f;
   settings.midi_ch = doc["ch"] | 1;
+  settings.midi_input_mode = doc["midi_in"] | MIDI_INPUT_BOTH;
+  if (settings.midi_input_mode > MIDI_INPUT_OFF) settings.midi_input_mode = MIDI_INPUT_BOTH;
   settings.enc_state = (EncoderState)(doc["enc"] | 0);
   settings.oscilloscope_enabled = doc["osc"] | true;
   settings.arp_set.enabled = doc["arp_on"] | false;
@@ -1167,6 +1255,7 @@ void loadSettings() {
   timb_mod_cv = settings.timb_mod_cv;
   color_mod_cv = settings.color_mod_cv;
   midi_ch = settings.midi_ch;
+  midi_input_mode = settings.midi_input_mode;
   enc_state = settings.enc_state;
   oscilloscope_enabled = settings.oscilloscope_enabled;
 
@@ -1235,6 +1324,7 @@ void saveButton() {
       settings.timb_mod_cv = timb_mod_cv;
       settings.color_mod_cv = color_mod_cv;
       settings.midi_ch = midi_ch;
+      settings.midi_input_mode = midi_input_mode;
       settings.oscilloscope_enabled = oscilloscope_enabled;
 
       settings.arp_set.enabled = arp.enabled;
@@ -1272,21 +1362,18 @@ void setup() {
     fs_ready = true;
   }
 
+  Serial1.setRX(MIDI_UART_RX);
+  Serial1.begin(31250);
 
-  //  MIDI Initialization
-  if (USE_UART_MIDI == 1) {
-    Serial1.setRX(MIDI_UART_RX);
-    Serial1.begin(31250);
-  } else {
-    TinyUSBDevice.setManufacturerDescriptor("LEDLAUX");
-    TinyUSBDevice.setProductDescriptor("VIJA");
-    TinyUSBDevice.setSerialDescriptor("PICO0");
-    usb_midi.begin();
-  }
+  TinyUSBDevice.setManufacturerDescriptor("LEDLAUX");
+  TinyUSBDevice.setProductDescriptor("VIJA");
+  TinyUSBDevice.setSerialDescriptor("PICO0");
+  usb_midi.begin();
 
   i2s_output.setFrequency(SAMPLE_RATE);
   i2s_output.setDATA(I2S_DATA_PIN);
   i2s_output.setBCLK(I2S_BCLK_PIN);
+  i2s_output.setBuffers(8, 128);  
   i2s_output.begin();
 
   quantizer.Init();
@@ -1529,6 +1616,7 @@ void loop1() {
     }
   }
 
+
   // --- 4. ENCODER ROTATION ---
   static int lClk = HIGH;
   int clk = digitalRead(ENCODER_CLK);
@@ -1638,6 +1726,10 @@ void loop1() {
               cv_mod2 = !cv_mod2;
               cv_mod1 = filter_enabled = midi_mod = false;
               break;
+            case MIDI_INPUT:
+              midi_input_mode = (uint8_t)((midi_input_mode + 4 + step) % 4);
+              settings.midi_input_mode = midi_input_mode;
+              break;  
             case MIDI_CH:
               midi_ch = constrain(midi_ch + step, 1, 16);
               break;
