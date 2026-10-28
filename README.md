@@ -153,7 +153,7 @@ Connect your **PCM5102** or similar I2S DAC:
 * **BCK (BCLK)** -> Pico GP10 
 * **LCK (LRCK)** -> Pico GP11 
 
-### 2. Control & Display
+### 2. Control & Display (SSD1306 or SH110X)
 * **OLED SDA** -> Pico GP4 
 * **OLED SCL** -> Pico GP5
 * **Encoder SW** -> Pico GP6
