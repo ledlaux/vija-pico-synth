@@ -46,7 +46,6 @@
   
 */
 
-
 #include <Arduino.h>
 #include <I2S.h>
 #include <Adafruit_TinyUSB.h>
@@ -69,6 +68,8 @@
 #include <Adafruit_SH110X.h>
 #define SCREEN_WHITE SH110X_WHITE
 #endif
+
+#define OLED_FLIP 0  // 0 = normal, 1 = upside down 
 
 #define I2S_DATA_PIN 9
 #define I2S_BCLK_PIN 10
@@ -1473,6 +1474,13 @@ void setup1() {
 #ifdef SH110X
   display.begin(0x3C, true);
 #endif
+
+#if OLED_FLIP
+  display.setRotation(2);
+#else
+  display.setRotation(0);
+#endif
+
   drawSplash();
   delay(4000);
   display.clearDisplay();
