@@ -33,8 +33,8 @@ The synthesizer operates in three primary display modes:
 
    To enter click encoder button  
    Rotate to cycle through parameters       
-   Click to select parameter and rotate to adjust  
-   Click to return to the menu after adjusting parameter   
+   Click to select parameter and rotate to adjust
+   Click again to return to the menu item selection
    Long press to save menu settings and last used engine    
    Double click to exit menu or automatic exit after timeout   
      
