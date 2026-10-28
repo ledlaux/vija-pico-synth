@@ -17,7 +17,7 @@
   - MIDI note quantization according to the selected scale
   
   Hardware:
-  - RP2040 or RP2350 board, I2S PCM5102 DAC, SSD1306 OLED, rotary encoder with button, 2 pots, 2 cv jacks or 2 more pots
+  - RP2040 or RP2350 board, I2S PCM5102 DAC, SSD1306 or SH110X display, rotary encoder with button, 2 pots, 2 cv jacks or 2 more pots
   - MIDI via USB or UART
 
   For this project I use RP2040 Zero model, so adjust GPIO numbers to your board.
