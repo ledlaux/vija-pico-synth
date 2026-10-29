@@ -1,5 +1,5 @@
 /*
-  VIJA (v1.0.4) 
+  VIJA (v1.0.5) 
 
   Copyright (c) 2026 Vadims Maksimovs ledlaux.github.com | GPLv3
   
@@ -820,7 +820,7 @@ void drawSplash() {
   display.getTextBounds(subtitle, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 40);
   display.println(subtitle);
-  const char *version = "v1.0.4";
+  const char *version = "v1.0.5";
   display.getTextBounds(version, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 54);
   display.println(version);
