@@ -18,7 +18,7 @@
   
   Hardware:
   - RP2040 or RP2350 board, I2S PCM5102 DAC, SSD1306 or SH110X display, rotary encoder with button, 2 pots, 2 cv jacks or 2 more pots
-  - MIDI via USB or UART
+  - MIDI via USB and UART
 
   For this project I use RP2040 Zero model, so adjust GPIO numbers to your board.
 
@@ -919,8 +919,7 @@ void __not_in_flash_func(advanceArp)() {
 }
 
 
-// MIDI event ring buffer. UART and USB are polled independently, then
-// complete MIDI messages are dispatched from this queue in bounded batches.
+// MIDI ring buffer
 
 struct MidiEvent {
   uint8_t status;
@@ -976,13 +975,12 @@ static inline void queueUartMidiByte(uint8_t byte) {
   static uint8_t data_bytes[2] = { 0, 0 };
   static uint8_t data_idx = 0;
 
-  // Realtime bytes can be interleaved with channel messages.
   if (byte >= 0xF8) {
     handleMidiRealtime(byte);
     return;
   }
   if (byte & 0x80) {
-    if (byte >= 0xF0) { // Ignore unsupported system-common messages.
+    if (byte >= 0xF0) { // Ignore system messages
       running_status = 0;
       data_idx = 0;
       return;
@@ -1156,12 +1154,11 @@ void __not_in_flash_func(processMIDIMessage)(uint8_t status, uint8_t d1, uint8_t
 }
 
 void __not_in_flash_func(handleMIDI)() {
-  // Always poll both transports when BOTH is selected; the queue merges them.
   pollUartMidi();
   pollUsbMidi();
 
   uint8_t status, d1, d2;
-  uint8_t budget = 16; // bounded dispatch keeps MIDI bursts from monopolizing audio
+  uint8_t budget = 16; 
   while (budget-- && midiQueuePop(status, d1, d2)) {
     processMIDIMessage(status, d1, d2);
   }
@@ -1214,7 +1211,6 @@ void saveSettings() {
     saved_start_time = millis();
   }
 }
-
 
 
 void loadSettings() {
@@ -1313,9 +1309,7 @@ void loadSettings() {
     quantizer.Configure(braids::scales[quant_scale_idx]);
   }
 
-  // Mark loaded settings as the saved baseline.
   lastSavedSettings = settings;
-
   engine_updated = true;
 }
 
@@ -1517,7 +1511,6 @@ void loop1() {
   static float smoothCut = 0.5f;
   static float smoothRes = 0.25f;
   static unsigned long last_pot_read = 0;
-
 
   static unsigned long last_btn_time = 0;
   static unsigned long last_click_time = 0;
